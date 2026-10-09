@@ -12,21 +12,23 @@ class TasksScreen extends StatefulWidget {
 
 class _TasksScreenState extends State<TasksScreen> {
   List<Map<String, dynamic>> tasks = [];
+  List<Map<String, dynamic>> equipmentList = [];
   bool isLoading = true;
-
   static const String _storageKey = 'tasks';
+  static const String _equipmentKey = 'equipment';
 
   @override
   void initState() {
     super.initState();
-    _loadTasks();
+    _loadAll();
   }
 
-  Future<void> _loadTasks() async {
+  Future<void> _loadAll() async {
     final prefs = await SharedPreferences.getInstance();
-    final String? raw = prefs.getString(_storageKey);
-    if (raw != null && raw.isNotEmpty) {
-      final List<dynamic> decoded = jsonDecode(raw);
+
+    final String? rawTasks = prefs.getString(_storageKey);
+    if (rawTasks != null && rawTasks.isNotEmpty) {
+      final List<dynamic> decoded = jsonDecode(rawTasks);
       tasks = decoded.map((e) => Map<String, dynamic>.from(e)).toList();
     } else {
       tasks = [
@@ -35,30 +37,44 @@ class _TasksScreenState extends State<TasksScreen> {
           'category': '💧 Вода',
           'priority': '🔴 Срочно',
           'time': 'Сегодня, 10:00',
+          'equipmentId': null,
         },
         {
           'title': 'Обход трансформаторной подстанции',
           'category': '⚡ Электрика',
           'priority': '🟡 Средний',
           'time': 'Сегодня, 14:00',
+          'equipmentId': null,
         },
         {
           'title': 'Передать показания счетчиков',
           'category': '📊 Счётчики',
           'priority': '🟢 Плановое',
           'time': '25 число, 08:00',
+          'equipmentId': null,
         },
       ];
       await _saveTasks();
     }
-    setState(() {
-      isLoading = false;
-    });
+
+    final String? rawEq = prefs.getString(_equipmentKey);
+    if (rawEq != null && rawEq.isNotEmpty) {
+      final List<dynamic> decoded = jsonDecode(rawEq);
+      equipmentList = decoded.map((e) => Map<String, dynamic>.from(e)).toList();
+    }
+
+    setState(() => isLoading = false);
   }
 
   Future<void> _saveTasks() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_storageKey, jsonEncode(tasks));
+  }
+
+  String? _equipmentName(String? id) {
+    if (id == null) return null;
+    final eq = equipmentList.firstWhere((e) => e['id'] == id, orElse: () => {});
+    return eq['name'] as String?;
   }
 
   void _addTask() {
@@ -67,6 +83,7 @@ class _TasksScreenState extends State<TasksScreen> {
     String selectedPriority = '🟡 Средний';
     DateTime? selectedDate;
     TimeOfDay? selectedTime;
+    String? selectedEquipmentId;
 
     final List<String> categories = [
       '💧 Вода',
@@ -85,13 +102,10 @@ class _TasksScreenState extends State<TasksScreen> {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setStateDialog) {
-            String formatDate(DateTime date) {
-              return '${date.day.toString().padLeft(2, '0')}.${date.month.toString().padLeft(2, '0')}.${date.year}';
-            }
-
-            String formatTime(TimeOfDay time) {
-              return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
-            }
+            String formatDate(DateTime d) =>
+                '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}.${d.year}';
+            String formatTime(TimeOfDay t) =>
+                '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
             return AlertDialog(
               title: const Text('Новая задача'),
@@ -102,31 +116,59 @@ class _TasksScreenState extends State<TasksScreen> {
                     TextField(
                       controller: titleController,
                       decoration: const InputDecoration(
-                        hintText: 'Например: Заменить лампу в цехе №2',
+                        hintText: 'Например: Заменить лампу',
                       ),
                       autofocus: true,
                     ),
                     const SizedBox(height: 16),
+                    DropdownButtonFormField<String?>(
+                      value: selectedEquipmentId,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Оборудование',
+                      ),
+                      items: [
+                        const DropdownMenuItem<String?>(
+                          value: null,
+                          child: Text('— Без привязки —'),
+                        ),
+                        ...equipmentList.map((e) {
+                          return DropdownMenuItem<String?>(
+                            value: e['id'] as String,
+                            child: Text(
+                              e['name'] ?? '',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          );
+                        }),
+                      ],
+                      onChanged: (v) {
+                        setStateDialog(() => selectedEquipmentId = v);
+                      },
+                    ),
+                    const SizedBox(height: 12),
                     DropdownButtonFormField<String>(
                       value: selectedCategory,
                       decoration: const InputDecoration(labelText: 'Категория'),
-                      items: categories.map((cat) {
-                        return DropdownMenuItem(value: cat, child: Text(cat));
-                      }).toList(),
-                      onChanged: (value) {
-                        setStateDialog(() => selectedCategory = value!);
-                      },
+                      items: categories
+                          .map(
+                            (c) => DropdownMenuItem(value: c, child: Text(c)),
+                          )
+                          .toList(),
+                      onChanged: (v) =>
+                          setStateDialog(() => selectedCategory = v!),
                     ),
                     const SizedBox(height: 12),
                     DropdownButtonFormField<String>(
                       value: selectedPriority,
                       decoration: const InputDecoration(labelText: 'Приоритет'),
-                      items: priorities.map((pr) {
-                        return DropdownMenuItem(value: pr, child: Text(pr));
-                      }).toList(),
-                      onChanged: (value) {
-                        setStateDialog(() => selectedPriority = value!);
-                      },
+                      items: priorities
+                          .map(
+                            (p) => DropdownMenuItem(value: p, child: Text(p)),
+                          )
+                          .toList(),
+                      onChanged: (v) =>
+                          setStateDialog(() => selectedPriority = v!),
                     ),
                     const SizedBox(height: 16),
                     Row(
@@ -184,28 +226,29 @@ class _TasksScreenState extends State<TasksScreen> {
                 ),
                 ElevatedButton(
                   onPressed: () async {
-                    if (titleController.text.trim().isNotEmpty) {
-                      String timeLabel = 'Сегодня';
-                      if (selectedDate != null) {
-                        timeLabel = formatDate(selectedDate!);
-                        if (selectedTime != null) {
-                          timeLabel += ', ${formatTime(selectedTime!)}';
-                        }
-                      } else if (selectedTime != null) {
-                        timeLabel = 'Сегодня, ${formatTime(selectedTime!)}';
-                      }
+                    if (titleController.text.trim().isEmpty) return;
 
-                      setState(() {
-                        tasks.add({
-                          'title': titleController.text.trim(),
-                          'category': selectedCategory,
-                          'priority': selectedPriority,
-                          'time': timeLabel,
-                        });
-                      });
-                      await _saveTasks();
-                      if (context.mounted) Navigator.pop(context);
+                    String timeLabel = 'Сегодня';
+                    if (selectedDate != null) {
+                      timeLabel = formatDate(selectedDate!);
+                      if (selectedTime != null) {
+                        timeLabel += ', ${formatTime(selectedTime!)}';
+                      }
+                    } else if (selectedTime != null) {
+                      timeLabel = 'Сегодня, ${formatTime(selectedTime!)}';
                     }
+
+                    setState(() {
+                      tasks.add({
+                        'title': titleController.text.trim(),
+                        'category': selectedCategory,
+                        'priority': selectedPriority,
+                        'time': timeLabel,
+                        'equipmentId': selectedEquipmentId,
+                      });
+                    });
+                    await _saveTasks();
+                    if (context.mounted) Navigator.pop(context);
                   },
                   child: const Text('Добавить'),
                 ),
@@ -218,67 +261,107 @@ class _TasksScreenState extends State<TasksScreen> {
   }
 
   Future<void> _deleteTask(int index) async {
-    setState(() {
-      tasks.removeAt(index);
-    });
+    setState(() => tasks.removeAt(index));
     await _saveTasks();
   }
 
   @override
+  @override
   Widget build(BuildContext context) {
     if (isLoading) {
-      return const Center(child: CircularProgressIndicator());
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    if (tasks.isEmpty) {
-      return const Center(
-        child: Text(
-          'Задач пока нет.\nНажми «+», чтобы добавить.',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 16, color: Colors.grey),
-        ),
-      );
-    }
+    return Scaffold(
+      body: tasks.isEmpty
+          ? const Center(
+              child: Text(
+                'Задач пока нет.\nНажми «+», чтобы добавить.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 16, color: Colors.grey),
+              ),
+            )
+          : ListView.builder(
+              padding: const EdgeInsets.all(12),
+              itemCount: tasks.length,
+              itemBuilder: (context, index) {
+                final task = tasks[index];
+                final eqName = _equipmentName(task['equipmentId']);
 
-    return ListView.builder(
-      padding: const EdgeInsets.all(12),
-      itemCount: tasks.length,
-      itemBuilder: (context, index) {
-        final task = tasks[index];
-        return Dismissible(
-          key: ValueKey('${task['title']}_$index'),
-          direction: DismissDirection.endToStart,
-          background: Container(
-            margin: const EdgeInsets.only(bottom: 12),
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            alignment: Alignment.centerRight,
-            decoration: BoxDecoration(
-              color: Colors.red,
-              borderRadius: BorderRadius.circular(12),
+                return Dismissible(
+                  key: ValueKey('${task['title']}_$index'),
+                  direction: DismissDirection.endToStart,
+                  background: Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    alignment: Alignment.centerRight,
+                    decoration: BoxDecoration(
+                      color: Colors.red,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.delete, color: Colors.white),
+                  ),
+                  onDismissed: (_) => _deleteTask(index),
+                  child: Card(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    elevation: 2,
+                    child: ListTile(
+                      title: Text(
+                        task['title'],
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      subtitle: Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (eqName != null)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 2),
+                                child: Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.build,
+                                      size: 14,
+                                      color: Color(0xFF1B5E20),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Expanded(
+                                      child: Text(
+                                        eqName,
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          color: Color(0xFF1B5E20),
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            Text('${task['category']}  •  ${task['priority']}'),
+                          ],
+                        ),
+                      ),
+                      trailing: Text(
+                        task['time'],
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
             ),
-            child: const Icon(Icons.delete, color: Colors.white),
-          ),
-          onDismissed: (_) => _deleteTask(index),
-          child: Card(
-            margin: const EdgeInsets.only(bottom: 12),
-            elevation: 2,
-            child: ListTile(
-              title: Text(
-                task['title'],
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-              subtitle: Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text('${task['category']}  •  ${task['priority']}'),
-              ),
-              trailing: Text(
-                task['time'],
-                style: const TextStyle(fontSize: 12, color: Colors.grey),
-              ),
-            ),
-          ),
-        );
-      },
+      floatingActionButton: FloatingActionButton(
+        onPressed: _addTask,
+        backgroundColor: const Color(0xFF1B5E20),
+        foregroundColor: Colors.white,
+        child: const Icon(Icons.add),
+      ),
     );
   }
 }

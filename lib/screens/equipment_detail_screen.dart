@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class EquipmentDetailScreen extends StatefulWidget {
   final Map<String, dynamic> equipment;
@@ -19,6 +22,9 @@ class EquipmentDetailScreen extends StatefulWidget {
 class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
   late TextEditingController descriptionCtrl;
   late List<Map<String, dynamic>> spareParts;
+  List<Map<String, dynamic>> relatedTasks = [];
+
+  static const String _tasksKey = 'tasks';
 
   @override
   void initState() {
@@ -29,6 +35,23 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
     spareParts = (widget.equipment['spareParts'] as List? ?? [])
         .map((e) => Map<String, dynamic>.from(e))
         .toList();
+    _loadRelatedTasks();
+  }
+
+  Future<void> _loadRelatedTasks() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_tasksKey);
+    if (raw != null && raw.isNotEmpty) {
+      final List<dynamic> decoded = jsonDecode(raw);
+      final allTasks = decoded
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      setState(() {
+        relatedTasks = allTasks
+            .where((t) => t['equipmentId'] == widget.equipment['id'])
+            .toList();
+      });
+    }
   }
 
   @override
@@ -122,9 +145,7 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Удалить оборудование?'),
-        content: Text(
-          '«${widget.equipment['name']}» будет удалено безвозвратно.',
-        ),
+        content: Text('«${widget.equipment['name']}» будет удалено.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -164,7 +185,6 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // Информация об объекте
           Card(
             elevation: 1,
             child: Padding(
@@ -186,7 +206,6 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
           ),
           const SizedBox(height: 16),
 
-          // Описание
           const Text(
             'Описание',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
@@ -196,7 +215,7 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
             controller: descriptionCtrl,
             maxLines: 4,
             decoration: InputDecoration(
-              hintText: 'Назначение, особенности, дата ввода в эксплуатацию...',
+              hintText: 'Назначение, особенности, дата ввода...',
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
@@ -217,7 +236,54 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
           ),
           const SizedBox(height: 24),
 
-          // Запчасти
+          // === История работ ===
+          Row(
+            children: [
+              const Text(
+                'История работ',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1B5E20),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  '${relatedTasks.length}',
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (relatedTasks.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Text(
+                'Задач по этому оборудованию пока нет.\nСоздай задачу на вкладке «Задачи» и выбери это оборудование.',
+                style: TextStyle(color: Colors.grey),
+              ),
+            )
+          else
+            ...relatedTasks.map((t) {
+              return Card(
+                margin: const EdgeInsets.only(bottom: 8),
+                child: ListTile(
+                  leading: const Icon(Icons.check_circle_outline),
+                  title: Text(t['title'] ?? ''),
+                  subtitle: Text(
+                    '${t['category']}  •  ${t['priority']}  •  ${t['time']}',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+              );
+            }).toList(),
+
+          const SizedBox(height: 24),
+
+          // === Запчасти ===
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -237,7 +303,7 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 12),
               child: Text(
-                'Запчастей пока нет. Нажми «Добавить».',
+                'Запчастей пока нет.',
                 style: TextStyle(color: Colors.grey),
               ),
             )
