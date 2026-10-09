@@ -19,9 +19,10 @@ class _TasksScreenState extends State<TasksScreen> {
 
   // Фильтры
   String searchQuery = '';
-  String? priorityFilter; // null = все
+  String? priorityFilter;
   String? categoryFilter;
   String? equipmentFilter;
+  bool showOnlyCompleted = false; // показать выполненные
 
   final List<String> categories = [
     '💧 Вода',
@@ -48,6 +49,10 @@ class _TasksScreenState extends State<TasksScreen> {
     if (rawTasks != null && rawTasks.isNotEmpty) {
       final List<dynamic> decoded = jsonDecode(rawTasks);
       tasks = decoded.map((e) => Map<String, dynamic>.from(e)).toList();
+      // На всякий случай проставим completed=false там, где поля нет
+      for (final t in tasks) {
+        t.putIfAbsent('completed', () => false);
+      }
     } else {
       tasks = [
         {
@@ -56,6 +61,7 @@ class _TasksScreenState extends State<TasksScreen> {
           'priority': '🔴 Срочно',
           'time': 'Сегодня, 10:00',
           'equipmentId': null,
+          'completed': false,
         },
         {
           'title': 'Обход трансформаторной подстанции',
@@ -63,6 +69,7 @@ class _TasksScreenState extends State<TasksScreen> {
           'priority': '🟡 Средний',
           'time': 'Сегодня, 14:00',
           'equipmentId': null,
+          'completed': false,
         },
         {
           'title': 'Передать показания счетчиков',
@@ -70,6 +77,7 @@ class _TasksScreenState extends State<TasksScreen> {
           'priority': '🟢 Плановое',
           'time': '25 число, 08:00',
           'equipmentId': null,
+          'completed': false,
         },
       ];
       await _saveTasks();
@@ -105,6 +113,9 @@ class _TasksScreenState extends State<TasksScreen> {
 
   List<Map<String, dynamic>> get _filteredTasks {
     return tasks.where((t) {
+      final completed = t['completed'] == true;
+      if (showOnlyCompleted != completed) return false;
+
       if (searchQuery.isNotEmpty) {
         final q = searchQuery.toLowerCase();
         final title = (t['title'] ?? '').toString().toLowerCase();
@@ -126,6 +137,9 @@ class _TasksScreenState extends State<TasksScreen> {
       return true;
     }).toList();
   }
+
+  int get _activeCount => tasks.where((t) => t['completed'] != true).length;
+  int get _doneCount => tasks.where((t) => t['completed'] == true).length;
 
   void _resetFilters() {
     setState(() {
@@ -271,15 +285,42 @@ class _TasksScreenState extends State<TasksScreen> {
     );
   }
 
-  void _addTask() {
-    final TextEditingController titleController = TextEditingController();
-    String selectedCategory = '🔧 Механика';
-    String selectedPriority = '🟡 Средний';
+  // Диалог создания/редактирования задачи
+  Future<void> _showTaskDialog({int? editIndex}) async {
+    final bool isEdit = editIndex != null;
+    final existing = isEdit ? tasks[editIndex] : null;
+
+    final TextEditingController titleController = TextEditingController(
+      text: existing?['title'] ?? '',
+    );
+    String selectedCategory = existing?['category'] ?? '🔧 Механика';
+    String selectedPriority = existing?['priority'] ?? '🟡 Средний';
+    String? selectedEquipmentId = existing?['equipmentId'];
     DateTime? selectedDate;
     TimeOfDay? selectedTime;
-    String? selectedEquipmentId;
 
-    showDialog(
+    // Для редактирования попробуем распарсить дату из существующего текста
+    // (простой разбор: если в time есть ДД.ММ.ГГГГ — извлекаем)
+    if (isEdit && existing?['time'] != null) {
+      final timeStr = existing!['time'].toString();
+      final match = RegExp(r'(\d{2})\.(\d{2})\.(\d{4})').firstMatch(timeStr);
+      if (match != null) {
+        selectedDate = DateTime(
+          int.parse(match.group(3)!),
+          int.parse(match.group(2)!),
+          int.parse(match.group(1)!),
+        );
+      }
+      final timeMatch = RegExp(r'(\d{2}):(\d{2})').firstMatch(timeStr);
+      if (timeMatch != null) {
+        selectedTime = TimeOfDay(
+          hour: int.parse(timeMatch.group(1)!),
+          minute: int.parse(timeMatch.group(2)!),
+        );
+      }
+    }
+
+    await showDialog(
       context: context,
       builder: (context) {
         return StatefulBuilder(
@@ -290,7 +331,7 @@ class _TasksScreenState extends State<TasksScreen> {
                 '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
             return AlertDialog(
-              title: const Text('Новая задача'),
+              title: Text(isEdit ? 'Редактировать задачу' : 'Новая задача'),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -406,6 +447,10 @@ class _TasksScreenState extends State<TasksScreen> {
                   child: const Text('Отмена'),
                 ),
                 ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1B5E20),
+                    foregroundColor: Colors.white,
+                  ),
                   onPressed: () async {
                     if (titleController.text.trim().isEmpty) return;
 
@@ -420,18 +465,27 @@ class _TasksScreenState extends State<TasksScreen> {
                     }
 
                     setState(() {
-                      tasks.add({
-                        'title': titleController.text.trim(),
-                        'category': selectedCategory,
-                        'priority': selectedPriority,
-                        'time': timeLabel,
-                        'equipmentId': selectedEquipmentId,
-                      });
+                      if (isEdit) {
+                        tasks[editIndex]['title'] = titleController.text.trim();
+                        tasks[editIndex]['category'] = selectedCategory;
+                        tasks[editIndex]['priority'] = selectedPriority;
+                        tasks[editIndex]['time'] = timeLabel;
+                        tasks[editIndex]['equipmentId'] = selectedEquipmentId;
+                      } else {
+                        tasks.add({
+                          'title': titleController.text.trim(),
+                          'category': selectedCategory,
+                          'priority': selectedPriority,
+                          'time': timeLabel,
+                          'equipmentId': selectedEquipmentId,
+                          'completed': false,
+                        });
+                      }
                     });
                     await _saveTasks();
                     if (context.mounted) Navigator.pop(context);
                   },
-                  child: const Text('Добавить'),
+                  child: Text(isEdit ? 'Сохранить' : 'Добавить'),
                 ),
               ],
             );
@@ -439,6 +493,13 @@ class _TasksScreenState extends State<TasksScreen> {
         );
       },
     );
+  }
+
+  Future<void> _toggleCompleted(int index) async {
+    setState(() {
+      tasks[index]['completed'] = !(tasks[index]['completed'] == true);
+    });
+    await _saveTasks();
   }
 
   Future<void> _deleteTask(int index) async {
@@ -460,9 +521,38 @@ class _TasksScreenState extends State<TasksScreen> {
     return Scaffold(
       body: Column(
         children: [
-          // Поиск + кнопка "Ещё"
+          // Переключатель: Активные / Выполненные
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: SegmentedButton<bool>(
+                    segments: [
+                      ButtonSegment(
+                        value: false,
+                        label: Text('Активные ($_activeCount)'),
+                        icon: const Icon(Icons.pending_actions, size: 16),
+                      ),
+                      ButtonSegment(
+                        value: true,
+                        label: Text('Готово ($_doneCount)'),
+                        icon: const Icon(Icons.check_circle, size: 16),
+                      ),
+                    ],
+                    selected: {showOnlyCompleted},
+                    onSelectionChanged: (s) =>
+                        setState(() => showOnlyCompleted = s.first),
+                    style: ButtonStyle(visualDensity: VisualDensity.compact),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // Поиск + кнопка "Ещё"
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
             child: Row(
               children: [
                 Expanded(
@@ -549,14 +639,14 @@ class _TasksScreenState extends State<TasksScreen> {
           ),
           const SizedBox(height: 4),
 
-          // Счётчик найденного
-          if (filtered.length != tasks.length)
+          if (filtered.length !=
+              (showOnlyCompleted ? _doneCount : _activeCount))
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
-                  'Найдено: ${filtered.length} из ${tasks.length}',
+                  'Найдено: ${filtered.length}',
                   style: const TextStyle(color: Colors.grey, fontSize: 12),
                 ),
               ),
@@ -568,9 +658,9 @@ class _TasksScreenState extends State<TasksScreen> {
             child: filtered.isEmpty
                 ? Center(
                     child: Text(
-                      tasks.isEmpty
-                          ? 'Задач пока нет.\nНажми «+», чтобы добавить.'
-                          : 'Ничего не найдено.\nПопробуй изменить фильтры.',
+                      showOnlyCompleted
+                          ? 'Выполненных задач пока нет.\nОтмечай их галочкой!'
+                          : 'Активных задач нет.\nНажми «+», чтобы добавить.',
                       textAlign: TextAlign.center,
                       style: const TextStyle(fontSize: 16, color: Colors.grey),
                     ),
@@ -581,6 +671,8 @@ class _TasksScreenState extends State<TasksScreen> {
                     itemBuilder: (context, index) {
                       final task = filtered[index];
                       final eqName = _equipmentName(task['equipmentId']);
+                      final realIndex = tasks.indexOf(task);
+                      final isDone = task['completed'] == true;
 
                       return Dismissible(
                         key: ValueKey(
@@ -600,12 +692,28 @@ class _TasksScreenState extends State<TasksScreen> {
                         onDismissed: (_) => _deleteTask(index),
                         child: Card(
                           margin: const EdgeInsets.only(bottom: 12),
-                          elevation: 2,
+                          elevation: isDone ? 0 : 2,
+                          color: isDone ? Colors.grey.shade100 : null,
                           child: ListTile(
+                            leading: IconButton(
+                              icon: Icon(
+                                isDone
+                                    ? Icons.check_circle
+                                    : Icons.radio_button_unchecked,
+                                color: isDone
+                                    ? const Color(0xFF1B5E20)
+                                    : Colors.grey,
+                              ),
+                              onPressed: () => _toggleCompleted(realIndex),
+                            ),
                             title: Text(
                               task['title'],
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontWeight: FontWeight.bold,
+                                decoration: isDone
+                                    ? TextDecoration.lineThrough
+                                    : null,
+                                color: isDone ? Colors.grey : null,
                               ),
                             ),
                             subtitle: Padding(
@@ -651,6 +759,7 @@ class _TasksScreenState extends State<TasksScreen> {
                                 color: Colors.grey,
                               ),
                             ),
+                            onTap: () => _showTaskDialog(editIndex: realIndex),
                           ),
                         ),
                       );
@@ -660,7 +769,7 @@ class _TasksScreenState extends State<TasksScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: _addTask,
+        onPressed: () => _showTaskDialog(),
         backgroundColor: const Color(0xFF1B5E20),
         foregroundColor: Colors.white,
         child: const Icon(Icons.add),
