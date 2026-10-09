@@ -1,7 +1,10 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:file_selector/file_selector.dart';
+import 'package:path_provider/path_provider.dart';
 
 class TasksScreen extends StatefulWidget {
   const TasksScreen({super.key});
@@ -17,7 +20,6 @@ class _TasksScreenState extends State<TasksScreen> {
   static const String _storageKey = 'tasks';
   static const String _equipmentKey = 'equipment';
 
-  // Фильтры
   String searchQuery = '';
   String? priorityFilter;
   String? categoryFilter;
@@ -52,6 +54,7 @@ class _TasksScreenState extends State<TasksScreen> {
       for (final t in tasks) {
         t.putIfAbsent('completed', () => false);
         t.putIfAbsent('comments', () => <Map<String, dynamic>>[]);
+        t.putIfAbsent('photos', () => <String>[]);
       }
     } else {
       tasks = [
@@ -63,15 +66,7 @@ class _TasksScreenState extends State<TasksScreen> {
           'equipmentId': null,
           'completed': false,
           'comments': <Map<String, dynamic>>[],
-        },
-        {
-          'title': 'Обход трансформаторной подстанции',
-          'category': '⚡ Электрика',
-          'priority': '🟡 Средний',
-          'time': 'Сегодня, 14:00',
-          'equipmentId': null,
-          'completed': false,
-          'comments': <Map<String, dynamic>>[],
+          'photos': <String>[],
         },
       ];
       await _saveTasks();
@@ -96,6 +91,91 @@ class _TasksScreenState extends State<TasksScreen> {
     final eq = equipmentList.firstWhere((e) => e['id'] == id, orElse: () => {});
     return eq['name'] as String?;
   }
+
+  // ============ ФАЙЛЫ ФОТО ============
+
+  /// Возвращает папку приложения, где хранятся фото задач.
+  /// Windows: C:\Users\<user>\AppData\Roaming\zavod_master\photos
+  /// Android: /data/data/<package>/files/photos
+  Future<Directory> _getPhotosDir() async {
+    final supportDir = await getApplicationSupportDirectory();
+    final photosDir = Directory(
+      '${supportDir.path}${Platform.pathSeparator}photos',
+    );
+    if (!await photosDir.exists()) {
+      await photosDir.create(recursive: true);
+    }
+    return photosDir;
+  }
+
+  /// Копирует внешний файл в папку приложения.
+  /// Возвращает новый путь или null, если не получилось.
+  Future<String?> _copyPhotoToApp(String sourcePath) async {
+    try {
+      final src = File(sourcePath);
+      if (!await src.exists()) return null;
+      final dir = await _getPhotosDir();
+      final parts = sourcePath.split('.');
+      final ext = parts.length > 1 ? parts.last.toLowerCase() : 'jpg';
+      final fileName =
+          '${DateTime.now().microsecondsSinceEpoch}_${sourcePath.hashCode}.$ext';
+      final newPath = '${dir.path}${Platform.pathSeparator}$fileName';
+      await src.copy(newPath);
+      return newPath;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Удаляет файл фото с диска (тихо игнорирует ошибки).
+  Future<void> _deletePhotoFile(String path) async {
+    try {
+      final f = File(path);
+      if (await f.exists()) {
+        await f.delete();
+      }
+    } catch (_) {}
+  }
+
+  // ============ ПРОСМОТР ФОТО ============
+
+  void _openPhoto(String path) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          backgroundColor: Colors.black,
+          insetPadding: const EdgeInsets.all(8),
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: InteractiveViewer(
+                  child: File(path).existsSync()
+                      ? Image.file(File(path), fit: BoxFit.contain)
+                      : const Center(
+                          child: Text(
+                            'Файл не найден',
+                            style: TextStyle(color: Colors.white),
+                          ),
+                        ),
+                ),
+              ),
+              Positioned(
+                right: 8,
+                top: 8,
+                child: IconButton(
+                  icon: const Icon(Icons.close, color: Colors.white),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ============ ФИЛЬТРЫ ============
 
   int get _activeFiltersCount {
     int count = 0;
@@ -168,13 +248,7 @@ class _TasksScreenState extends State<TasksScreen> {
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 20),
-                  const Text(
-                    'Категория',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w500,
-                      color: Colors.grey,
-                    ),
-                  ),
+                  const Text('Категория', style: TextStyle(color: Colors.grey)),
                   const SizedBox(height: 8),
                   Wrap(
                     spacing: 8,
@@ -196,14 +270,11 @@ class _TasksScreenState extends State<TasksScreen> {
                       }),
                     ],
                   ),
-                  const SizedBox(height: 20),
                   if (equipmentList.isNotEmpty) ...[
+                    const SizedBox(height: 20),
                     const Text(
                       'Оборудование',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w500,
-                        color: Colors.grey,
-                      ),
+                      style: TextStyle(color: Colors.grey),
                     ),
                     const SizedBox(height: 8),
                     Wrap(
@@ -235,8 +306,8 @@ class _TasksScreenState extends State<TasksScreen> {
                         }),
                       ],
                     ),
-                    const SizedBox(height: 20),
                   ],
+                  const SizedBox(height: 20),
                   Row(
                     children: [
                       Expanded(
@@ -269,7 +340,6 @@ class _TasksScreenState extends State<TasksScreen> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 10),
                 ],
               ),
             );
@@ -279,7 +349,8 @@ class _TasksScreenState extends State<TasksScreen> {
     );
   }
 
-  // ============ ДИАЛОГ ЗАДАЧИ (с комментариями) ============
+  // ============ ДИАЛОГ ЗАДАЧИ ============
+
   Future<void> _showTaskDialog({int? editIndex}) async {
     final bool isEdit = editIndex != null;
     final existing = isEdit ? tasks[editIndex] : null;
@@ -300,6 +371,17 @@ class _TasksScreenState extends State<TasksScreen> {
               .map((e) => Map<String, dynamic>.from(e))
               .toList()
         : [];
+
+    // Список актуальных путей фото (уже в папке приложения).
+    List<String> photos = isEdit
+        ? ((existing?['photos'] as List?) ?? [])
+              .map((e) => e.toString())
+              .toList()
+        : [];
+
+    // Новые фото, добавленные в этом сеансе диалога.
+    // Нужны, чтобы удалить их, если пользователь нажмёт "Отмена".
+    final List<String> newlyAddedPhotos = [];
 
     if (isEdit && existing?['time'] != null) {
       final timeStr = existing!['time'].toString();
@@ -330,7 +412,8 @@ class _TasksScreenState extends State<TasksScreen> {
             String formatTime(TimeOfDay t) =>
                 '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
             String formatDateTime(DateTime d) =>
-                '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}.${d.year} ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+                '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}.${d.year} '
+                '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
 
             Future<void> addComment() async {
               final text = commentController.text.trim();
@@ -343,6 +426,50 @@ class _TasksScreenState extends State<TasksScreen> {
                 });
                 commentController.clear();
               });
+            }
+
+            Future<void> pickPhotos() async {
+              try {
+                const typeGroup = XTypeGroup(
+                  label: 'Изображения',
+                  extensions: ['jpg', 'jpeg', 'png', 'heic', 'webp'],
+                );
+                final List<XFile> files = await openFiles(
+                  acceptedTypeGroups: [typeGroup],
+                );
+                if (files.isEmpty) return;
+
+                // Копируем каждый файл в папку приложения
+                for (final f in files) {
+                  final savedPath = await _copyPhotoToApp(f.path);
+                  if (savedPath != null) {
+                    newlyAddedPhotos.add(savedPath);
+                    photos.add(savedPath);
+                  }
+                }
+                setStateDialog(() {});
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Ошибка выбора фото: $e')),
+                  );
+                }
+              }
+            }
+
+            // Удаление фото из списка (и с диска, если оно уже сохранено)
+            Future<void> removePhoto(int index) async {
+              final path = photos[index];
+              setStateDialog(() => photos.removeAt(index));
+              newlyAddedPhotos.remove(path);
+              // Если это фото уже было в задаче (не в этом сеансе) — удаляем
+              // его с диска сразу. Если это новое — удалим при отмене или
+              // при сохранении (если не останется в списке).
+              if (isEdit && !newlyAddedPhotos.contains(path)) {
+                await _deletePhotoFile(path);
+              } else {
+                await _deletePhotoFile(path);
+              }
             }
 
             return AlertDialog(
@@ -462,7 +589,118 @@ class _TasksScreenState extends State<TasksScreen> {
                         ],
                       ),
 
-                      // ====== КОММЕНТАРИИ (только при редактировании) ======
+                      // ====== ФОТО ======
+                      if (isEdit) ...[
+                        const Divider(height: 32),
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.photo_camera,
+                              size: 20,
+                              color: Color(0xFF1B5E20),
+                            ),
+                            const SizedBox(width: 6),
+                            const Text(
+                              'Фотографии',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            if (photos.isNotEmpty)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF1B5E20),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Text(
+                                  '${photos.length}',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ),
+                            const Spacer(),
+                            TextButton.icon(
+                              onPressed: pickPhotos,
+                              icon: const Icon(Icons.add_a_photo, size: 16),
+                              label: const Text('Добавить'),
+                            ),
+                          ],
+                        ),
+                        if (photos.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          SizedBox(
+                            height: 90,
+                            child: ListView.separated(
+                              scrollDirection: Axis.horizontal,
+                              itemCount: photos.length,
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(width: 8),
+                              itemBuilder: (context, i) {
+                                final path = photos[i];
+                                final exists = File(path).existsSync();
+                                return Stack(
+                                  children: [
+                                    GestureDetector(
+                                      onTap: () => _openPhoto(path),
+                                      child: ClipRRect(
+                                        borderRadius: BorderRadius.circular(10),
+                                        child: Container(
+                                          width: 90,
+                                          height: 90,
+                                          color: Colors.grey.shade200,
+                                          child: exists
+                                              ? Image.file(
+                                                  File(path),
+                                                  fit: BoxFit.cover,
+                                                  errorBuilder: (_, __, ___) =>
+                                                      const Icon(
+                                                        Icons.broken_image,
+                                                        color: Colors.grey,
+                                                      ),
+                                                )
+                                              : const Icon(
+                                                  Icons.broken_image,
+                                                  color: Colors.grey,
+                                                ),
+                                        ),
+                                      ),
+                                    ),
+                                    Positioned(
+                                      right: 2,
+                                      top: 2,
+                                      child: InkWell(
+                                        onTap: () => removePhoto(i),
+                                        child: Container(
+                                          padding: const EdgeInsets.all(3),
+                                          decoration: const BoxDecoration(
+                                            color: Colors.black54,
+                                            shape: BoxShape.circle,
+                                          ),
+                                          child: const Icon(
+                                            Icons.close,
+                                            size: 14,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
+                          ),
+                        ],
+                      ],
+
+                      // ====== КОММЕНТАРИИ ======
                       if (isEdit) ...[
                         const Divider(height: 32),
                         Row(
@@ -502,7 +740,6 @@ class _TasksScreenState extends State<TasksScreen> {
                           ],
                         ),
                         const SizedBox(height: 10),
-
                         if (comments.isEmpty)
                           const Padding(
                             padding: EdgeInsets.symmetric(vertical: 8),
@@ -576,7 +813,6 @@ class _TasksScreenState extends State<TasksScreen> {
                               ),
                             );
                           }).toList(),
-
                         const SizedBox(height: 8),
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.end,
@@ -613,7 +849,13 @@ class _TasksScreenState extends State<TasksScreen> {
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: () async {
+                    // Отмена: удаляем все НОВЫЕ фото, которые успели скопировать
+                    for (final p in newlyAddedPhotos) {
+                      await _deletePhotoFile(p);
+                    }
+                    if (context.mounted) Navigator.pop(context);
+                  },
                   child: const Text('Отмена'),
                 ),
                 ElevatedButton(
@@ -623,6 +865,16 @@ class _TasksScreenState extends State<TasksScreen> {
                   ),
                   onPressed: () async {
                     if (titleController.text.trim().isEmpty) return;
+
+                    // Финальная проверка: удалить новые фото, которые пользователь
+                    // убрал из списка (на случай, если обработчик removePhoto
+                    // не успел сработать).
+                    final toDelete = newlyAddedPhotos
+                        .where((p) => !photos.contains(p))
+                        .toList();
+                    for (final p in toDelete) {
+                      await _deletePhotoFile(p);
+                    }
 
                     String timeLabel = 'Сегодня';
                     if (selectedDate != null) {
@@ -642,6 +894,7 @@ class _TasksScreenState extends State<TasksScreen> {
                         tasks[editIndex]['time'] = timeLabel;
                         tasks[editIndex]['equipmentId'] = selectedEquipmentId;
                         tasks[editIndex]['comments'] = comments;
+                        tasks[editIndex]['photos'] = photos;
                       } else {
                         tasks.add({
                           'title': titleController.text.trim(),
@@ -651,6 +904,7 @@ class _TasksScreenState extends State<TasksScreen> {
                           'equipmentId': selectedEquipmentId,
                           'completed': false,
                           'comments': <Map<String, dynamic>>[],
+                          'photos': <String>[],
                         });
                       }
                     });
@@ -676,10 +930,17 @@ class _TasksScreenState extends State<TasksScreen> {
 
   Future<void> _deleteTask(int index) async {
     final realIndex = tasks.indexOf(_filteredTasks[index]);
-    if (realIndex >= 0) {
-      setState(() => tasks.removeAt(realIndex));
-      await _saveTasks();
+    if (realIndex < 0) return;
+
+    // Удаляем фото задачи с диска
+    final task = tasks[realIndex];
+    final photosList = (task['photos'] as List?) ?? [];
+    for (final p in photosList) {
+      await _deletePhotoFile(p.toString());
     }
+
+    setState(() => tasks.removeAt(realIndex));
+    await _saveTasks();
   }
 
   @override
@@ -803,7 +1064,7 @@ class _TasksScreenState extends State<TasksScreen> {
                 ? Center(
                     child: Text(
                       showOnlyCompleted
-                          ? 'Выполненных задач пока нет.\nОтмечай их галочкой!'
+                          ? 'Выполненных задач пока нет.'
                           : 'Активных задач нет.\nНажми «+», чтобы добавить.',
                       textAlign: TextAlign.center,
                       style: const TextStyle(fontSize: 16, color: Colors.grey),
@@ -819,6 +1080,7 @@ class _TasksScreenState extends State<TasksScreen> {
                       final isDone = task['completed'] == true;
                       final commentCount =
                           (task['comments'] as List?)?.length ?? 0;
+                      final photoCount = (task['photos'] as List?)?.length ?? 0;
 
                       return Dismissible(
                         key: ValueKey(
@@ -894,8 +1156,11 @@ class _TasksScreenState extends State<TasksScreen> {
                                     ),
                                   Row(
                                     children: [
-                                      Text(
-                                        '${task['category']}  •  ${task['priority']}',
+                                      Flexible(
+                                        child: Text(
+                                          '${task['category']}  •  ${task['priority']}',
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
                                       ),
                                       if (commentCount > 0) ...[
                                         const SizedBox(width: 8),
@@ -907,6 +1172,22 @@ class _TasksScreenState extends State<TasksScreen> {
                                         const SizedBox(width: 2),
                                         Text(
                                           '$commentCount',
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.grey,
+                                          ),
+                                        ),
+                                      ],
+                                      if (photoCount > 0) ...[
+                                        const SizedBox(width: 8),
+                                        const Icon(
+                                          Icons.photo_camera,
+                                          size: 14,
+                                          color: Colors.grey,
+                                        ),
+                                        const SizedBox(width: 2),
+                                        Text(
+                                          '$photoCount',
                                           style: const TextStyle(
                                             fontSize: 12,
                                             color: Colors.grey,
