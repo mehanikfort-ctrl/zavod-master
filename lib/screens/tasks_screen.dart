@@ -22,7 +22,7 @@ class _TasksScreenState extends State<TasksScreen> {
   String? priorityFilter;
   String? categoryFilter;
   String? equipmentFilter;
-  bool showOnlyCompleted = false; // показать выполненные
+  bool showOnlyCompleted = false;
 
   final List<String> categories = [
     '💧 Вода',
@@ -49,9 +49,9 @@ class _TasksScreenState extends State<TasksScreen> {
     if (rawTasks != null && rawTasks.isNotEmpty) {
       final List<dynamic> decoded = jsonDecode(rawTasks);
       tasks = decoded.map((e) => Map<String, dynamic>.from(e)).toList();
-      // На всякий случай проставим completed=false там, где поля нет
       for (final t in tasks) {
         t.putIfAbsent('completed', () => false);
+        t.putIfAbsent('comments', () => <Map<String, dynamic>>[]);
       }
     } else {
       tasks = [
@@ -62,6 +62,7 @@ class _TasksScreenState extends State<TasksScreen> {
           'time': 'Сегодня, 10:00',
           'equipmentId': null,
           'completed': false,
+          'comments': <Map<String, dynamic>>[],
         },
         {
           'title': 'Обход трансформаторной подстанции',
@@ -70,14 +71,7 @@ class _TasksScreenState extends State<TasksScreen> {
           'time': 'Сегодня, 14:00',
           'equipmentId': null,
           'completed': false,
-        },
-        {
-          'title': 'Передать показания счетчиков',
-          'category': '📊 Счётчики',
-          'priority': '🟢 Плановое',
-          'time': '25 число, 08:00',
-          'equipmentId': null,
-          'completed': false,
+          'comments': <Map<String, dynamic>>[],
         },
       ];
       await _saveTasks();
@@ -285,7 +279,7 @@ class _TasksScreenState extends State<TasksScreen> {
     );
   }
 
-  // Диалог создания/редактирования задачи
+  // ============ ДИАЛОГ ЗАДАЧИ (с комментариями) ============
   Future<void> _showTaskDialog({int? editIndex}) async {
     final bool isEdit = editIndex != null;
     final existing = isEdit ? tasks[editIndex] : null;
@@ -293,14 +287,20 @@ class _TasksScreenState extends State<TasksScreen> {
     final TextEditingController titleController = TextEditingController(
       text: existing?['title'] ?? '',
     );
+    final TextEditingController commentController = TextEditingController();
+
     String selectedCategory = existing?['category'] ?? '🔧 Механика';
     String selectedPriority = existing?['priority'] ?? '🟡 Средний';
     String? selectedEquipmentId = existing?['equipmentId'];
     DateTime? selectedDate;
     TimeOfDay? selectedTime;
 
-    // Для редактирования попробуем распарсить дату из существующего текста
-    // (простой разбор: если в time есть ДД.ММ.ГГГГ — извлекаем)
+    List<Map<String, dynamic>> comments = isEdit
+        ? ((existing?['comments'] as List?) ?? [])
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList()
+        : [];
+
     if (isEdit && existing?['time'] != null) {
       final timeStr = existing!['time'].toString();
       final match = RegExp(r'(\d{2})\.(\d{2})\.(\d{4})').firstMatch(timeStr);
@@ -329,116 +329,286 @@ class _TasksScreenState extends State<TasksScreen> {
                 '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}.${d.year}';
             String formatTime(TimeOfDay t) =>
                 '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+            String formatDateTime(DateTime d) =>
+                '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}.${d.year} ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+
+            Future<void> addComment() async {
+              final text = commentController.text.trim();
+              if (text.isEmpty) return;
+              setStateDialog(() {
+                comments.add({
+                  'text': text,
+                  'author': 'Мастер',
+                  'createdAt': DateTime.now().toIso8601String(),
+                });
+                commentController.clear();
+              });
+            }
 
             return AlertDialog(
-              title: Text(isEdit ? 'Редактировать задачу' : 'Новая задача'),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextField(
-                      controller: titleController,
-                      decoration: const InputDecoration(
-                        hintText: 'Например: Заменить лампу',
-                      ),
-                      autofocus: true,
-                    ),
-                    const SizedBox(height: 16),
-                    DropdownButtonFormField<String?>(
-                      value: selectedEquipmentId,
-                      isExpanded: true,
-                      decoration: const InputDecoration(
-                        labelText: 'Оборудование',
-                      ),
-                      items: [
-                        const DropdownMenuItem<String?>(
-                          value: null,
-                          child: Text('— Без привязки —'),
+              title: Text(isEdit ? 'Задача' : 'Новая задача'),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      TextField(
+                        controller: titleController,
+                        decoration: const InputDecoration(
+                          labelText: 'Название',
+                          hintText: 'Например: Заменить лампу',
                         ),
-                        ...equipmentList.map((e) {
-                          return DropdownMenuItem<String?>(
-                            value: e['id'] as String,
+                        autofocus: !isEdit,
+                      ),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String?>(
+                        value: selectedEquipmentId,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Оборудование',
+                        ),
+                        items: [
+                          const DropdownMenuItem<String?>(
+                            value: null,
+                            child: Text('— Без привязки —'),
+                          ),
+                          ...equipmentList.map((e) {
+                            return DropdownMenuItem<String?>(
+                              value: e['id'] as String,
+                              child: Text(
+                                e['name'] ?? '',
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            );
+                          }),
+                        ],
+                        onChanged: (v) =>
+                            setStateDialog(() => selectedEquipmentId = v),
+                      ),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        value: selectedCategory,
+                        decoration: const InputDecoration(
+                          labelText: 'Категория',
+                        ),
+                        items: categories
+                            .map(
+                              (c) => DropdownMenuItem(value: c, child: Text(c)),
+                            )
+                            .toList(),
+                        onChanged: (v) =>
+                            setStateDialog(() => selectedCategory = v!),
+                      ),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        value: selectedPriority,
+                        decoration: const InputDecoration(
+                          labelText: 'Приоритет',
+                        ),
+                        items: priorities
+                            .map(
+                              (p) => DropdownMenuItem(value: p, child: Text(p)),
+                            )
+                            .toList(),
+                        onChanged: (v) =>
+                            setStateDialog(() => selectedPriority = v!),
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () async {
+                                final picked = await showDatePicker(
+                                  context: context,
+                                  initialDate: selectedDate ?? DateTime.now(),
+                                  firstDate: DateTime(2024),
+                                  lastDate: DateTime(2030),
+                                );
+                                if (picked != null) {
+                                  setStateDialog(() => selectedDate = picked);
+                                }
+                              },
+                              icon: const Icon(Icons.calendar_today, size: 18),
+                              label: Text(
+                                selectedDate == null
+                                    ? 'Дата'
+                                    : formatDate(selectedDate!),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () async {
+                                final picked = await showTimePicker(
+                                  context: context,
+                                  initialTime: selectedTime ?? TimeOfDay.now(),
+                                );
+                                if (picked != null) {
+                                  setStateDialog(() => selectedTime = picked);
+                                }
+                              },
+                              icon: const Icon(Icons.access_time, size: 18),
+                              label: Text(
+                                selectedTime == null
+                                    ? 'Время'
+                                    : formatTime(selectedTime!),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+
+                      // ====== КОММЕНТАРИИ (только при редактировании) ======
+                      if (isEdit) ...[
+                        const Divider(height: 32),
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.comment,
+                              size: 20,
+                              color: Color(0xFF1B5E20),
+                            ),
+                            const SizedBox(width: 6),
+                            const Text(
+                              'Комментарии',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            if (comments.isNotEmpty)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF1B5E20),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Text(
+                                  '${comments.length}',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+
+                        if (comments.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 8),
                             child: Text(
-                              e['name'] ?? '',
-                              overflow: TextOverflow.ellipsis,
+                              'Комментариев пока нет.',
+                              style: TextStyle(
+                                color: Colors.grey,
+                                fontSize: 13,
+                              ),
                             ),
-                          );
-                        }),
-                      ],
-                      onChanged: (v) =>
-                          setStateDialog(() => selectedEquipmentId = v),
-                    ),
-                    const SizedBox(height: 12),
-                    DropdownButtonFormField<String>(
-                      value: selectedCategory,
-                      decoration: const InputDecoration(labelText: 'Категория'),
-                      items: categories
-                          .map(
-                            (c) => DropdownMenuItem(value: c, child: Text(c)),
                           )
-                          .toList(),
-                      onChanged: (v) =>
-                          setStateDialog(() => selectedCategory = v!),
-                    ),
-                    const SizedBox(height: 12),
-                    DropdownButtonFormField<String>(
-                      value: selectedPriority,
-                      decoration: const InputDecoration(labelText: 'Приоритет'),
-                      items: priorities
-                          .map(
-                            (p) => DropdownMenuItem(value: p, child: Text(p)),
-                          )
-                          .toList(),
-                      onChanged: (v) =>
-                          setStateDialog(() => selectedPriority = v!),
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: () async {
-                              final picked = await showDatePicker(
-                                context: context,
-                                initialDate: selectedDate ?? DateTime.now(),
-                                firstDate: DateTime(2024),
-                                lastDate: DateTime(2030),
-                              );
-                              if (picked != null) {
-                                setStateDialog(() => selectedDate = picked);
-                              }
-                            },
-                            icon: const Icon(Icons.calendar_today, size: 18),
-                            label: Text(
-                              selectedDate == null
-                                  ? 'Дата'
-                                  : formatDate(selectedDate!),
+                        else
+                          ...comments.asMap().entries.map((entry) {
+                            final i = entry.key;
+                            final c = entry.value;
+                            final dt = DateTime.tryParse(
+                              (c['createdAt'] ?? '').toString(),
+                            );
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: Colors.grey.shade100,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.person,
+                                        size: 14,
+                                        color: Colors.grey,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        c['author'] ?? 'Мастер',
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      if (dt != null)
+                                        Text(
+                                          formatDateTime(dt),
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            color: Colors.grey,
+                                          ),
+                                        ),
+                                      const Spacer(),
+                                      InkWell(
+                                        onTap: () {
+                                          setStateDialog(() {
+                                            comments.removeAt(i);
+                                          });
+                                        },
+                                        child: const Icon(
+                                          Icons.close,
+                                          size: 16,
+                                          color: Colors.red,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(c['text'] ?? ''),
+                                ],
+                              ),
+                            );
+                          }).toList(),
+
+                        const SizedBox(height: 8),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: commentController,
+                                decoration: InputDecoration(
+                                  hintText: 'Написать комментарий...',
+                                  isDense: true,
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                ),
+                                maxLines: 2,
+                                minLines: 1,
+                              ),
                             ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: () async {
-                              final picked = await showTimePicker(
-                                context: context,
-                                initialTime: selectedTime ?? TimeOfDay.now(),
-                              );
-                              if (picked != null) {
-                                setStateDialog(() => selectedTime = picked);
-                              }
-                            },
-                            icon: const Icon(Icons.access_time, size: 18),
-                            label: Text(
-                              selectedTime == null
-                                  ? 'Время'
-                                  : formatTime(selectedTime!),
+                            const SizedBox(width: 8),
+                            IconButton.filled(
+                              style: IconButton.styleFrom(
+                                backgroundColor: const Color(0xFF1B5E20),
+                                foregroundColor: Colors.white,
+                              ),
+                              onPressed: addComment,
+                              icon: const Icon(Icons.send, size: 18),
                             ),
-                          ),
+                          ],
                         ),
                       ],
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
               actions: [
@@ -471,6 +641,7 @@ class _TasksScreenState extends State<TasksScreen> {
                         tasks[editIndex]['priority'] = selectedPriority;
                         tasks[editIndex]['time'] = timeLabel;
                         tasks[editIndex]['equipmentId'] = selectedEquipmentId;
+                        tasks[editIndex]['comments'] = comments;
                       } else {
                         tasks.add({
                           'title': titleController.text.trim(),
@@ -479,6 +650,7 @@ class _TasksScreenState extends State<TasksScreen> {
                           'time': timeLabel,
                           'equipmentId': selectedEquipmentId,
                           'completed': false,
+                          'comments': <Map<String, dynamic>>[],
                         });
                       }
                     });
@@ -521,36 +693,26 @@ class _TasksScreenState extends State<TasksScreen> {
     return Scaffold(
       body: Column(
         children: [
-          // Переключатель: Активные / Выполненные
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: SegmentedButton<bool>(
-                    segments: [
-                      ButtonSegment(
-                        value: false,
-                        label: Text('Активные ($_activeCount)'),
-                        icon: const Icon(Icons.pending_actions, size: 16),
-                      ),
-                      ButtonSegment(
-                        value: true,
-                        label: Text('Готово ($_doneCount)'),
-                        icon: const Icon(Icons.check_circle, size: 16),
-                      ),
-                    ],
-                    selected: {showOnlyCompleted},
-                    onSelectionChanged: (s) =>
-                        setState(() => showOnlyCompleted = s.first),
-                    style: ButtonStyle(visualDensity: VisualDensity.compact),
-                  ),
+            child: SegmentedButton<bool>(
+              segments: [
+                ButtonSegment(
+                  value: false,
+                  label: Text('Активные ($_activeCount)'),
+                  icon: const Icon(Icons.pending_actions, size: 16),
+                ),
+                ButtonSegment(
+                  value: true,
+                  label: Text('Готово ($_doneCount)'),
+                  icon: const Icon(Icons.check_circle, size: 16),
                 ),
               ],
+              selected: {showOnlyCompleted},
+              onSelectionChanged: (s) =>
+                  setState(() => showOnlyCompleted = s.first),
             ),
           ),
-
-          // Поиск + кнопка "Ещё"
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
             child: Row(
@@ -604,8 +766,6 @@ class _TasksScreenState extends State<TasksScreen> {
               ],
             ),
           ),
-
-          // Чипы приоритета
           SizedBox(
             height: 40,
             child: ListView(
@@ -638,22 +798,6 @@ class _TasksScreenState extends State<TasksScreen> {
             ),
           ),
           const SizedBox(height: 4),
-
-          if (filtered.length !=
-              (showOnlyCompleted ? _doneCount : _activeCount))
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Найдено: ${filtered.length}',
-                  style: const TextStyle(color: Colors.grey, fontSize: 12),
-                ),
-              ),
-            ),
-
-          const SizedBox(height: 4),
-
           Expanded(
             child: filtered.isEmpty
                 ? Center(
@@ -673,6 +817,8 @@ class _TasksScreenState extends State<TasksScreen> {
                       final eqName = _equipmentName(task['equipmentId']);
                       final realIndex = tasks.indexOf(task);
                       final isDone = task['completed'] == true;
+                      final commentCount =
+                          (task['comments'] as List?)?.length ?? 0;
 
                       return Dismissible(
                         key: ValueKey(
@@ -746,8 +892,28 @@ class _TasksScreenState extends State<TasksScreen> {
                                         ],
                                       ),
                                     ),
-                                  Text(
-                                    '${task['category']}  •  ${task['priority']}',
+                                  Row(
+                                    children: [
+                                      Text(
+                                        '${task['category']}  •  ${task['priority']}',
+                                      ),
+                                      if (commentCount > 0) ...[
+                                        const SizedBox(width: 8),
+                                        const Icon(
+                                          Icons.comment,
+                                          size: 14,
+                                          color: Colors.grey,
+                                        ),
+                                        const SizedBox(width: 2),
+                                        Text(
+                                          '$commentCount',
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.grey,
+                                          ),
+                                        ),
+                                      ],
+                                    ],
                                   ),
                                 ],
                               ),
