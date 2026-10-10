@@ -35,7 +35,7 @@ class NotificationService {
 
     // 3. Настройки для Windows
     const windowsSettings = WindowsInitializationSettings(
-      appName: 'Завод-Мастер',
+      appName: 'Завод-Механик',
       appUserModelId: 'Com.ZavodMaster.App',
       guid: 'd49b0314-ee7a-4626-bf79-97cdb8a991bb',
     );
