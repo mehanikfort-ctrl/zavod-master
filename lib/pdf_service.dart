@@ -31,6 +31,9 @@ class PdfService {
     }
   }
 
+  // ============================================================
+  //  ОТЧЁТ ПО ЗАДАЧАМ (день / неделя / месяц)
+  // ============================================================
   static Future<void> generateReport({
     required String title,
     required DateTime periodStart,
@@ -254,6 +257,258 @@ class PdfService {
     );
   }
 
+  // ============================================================
+  //  ВЕДОМОСТЬ ПОКАЗАНИЙ СЧЁТЧИКОВ
+  // ============================================================
+  static Future<void> generateMeterReport({
+    required DateTime period,
+    required List<Map<String, dynamic>> meters,
+  }) async {
+    final regular = await _loadRegular();
+    final bold = await _loadBold();
+    final dateFmt = DateFormat('dd.MM.yyyy');
+
+    const monthNames = [
+      'январь',
+      'февраль',
+      'март',
+      'апрель',
+      'май',
+      'июнь',
+      'июль',
+      'август',
+      'сентябрь',
+      'октябрь',
+      'ноябрь',
+      'декабрь',
+    ];
+    final monthName = monthNames[period.month - 1];
+    final periodLabel = '$monthName ${period.year}';
+
+    final prevMonth = period.month == 1
+        ? DateTime(period.year - 1, 12)
+        : DateTime(period.year, period.month - 1);
+
+    Map<String, dynamic>? findReading(
+      Map<String, dynamic> meter,
+      DateTime month,
+    ) {
+      final readings = (meter['readings'] as List?) ?? [];
+      for (final r in readings) {
+        final d = DateTime.tryParse((r['date'] ?? '').toString());
+        if (d != null && d.year == month.year && d.month == month.month) {
+          return Map<String, dynamic>.from(r);
+        }
+      }
+      return null;
+    }
+
+    final doc = pw.Document();
+
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        theme: pw.ThemeData.withFont(base: regular, bold: bold),
+        margin: const pw.EdgeInsets.all(28),
+        build: (context) => [
+          pw.Container(
+            padding: const pw.EdgeInsets.only(bottom: 8),
+            decoration: const pw.BoxDecoration(
+              border: pw.Border(
+                bottom: pw.BorderSide(width: 2, color: PdfColors.green900),
+              ),
+            ),
+            child: pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+              children: [
+                pw.Text(
+                  'Завод-Механик',
+                  style: pw.TextStyle(
+                    fontSize: 20,
+                    fontWeight: pw.FontWeight.bold,
+                    color: PdfColors.green900,
+                  ),
+                ),
+                pw.Text(
+                  'Сформирован: ${dateFmt.format(DateTime.now())}',
+                  style: const pw.TextStyle(
+                    fontSize: 10,
+                    color: PdfColors.grey700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          pw.SizedBox(height: 14),
+          pw.Text(
+            'Ведомость показаний счётчиков',
+            style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
+          ),
+          pw.SizedBox(height: 4),
+          pw.Text(
+            'Период: $periodLabel',
+            style: const pw.TextStyle(fontSize: 11, color: PdfColors.grey700),
+          ),
+          pw.SizedBox(height: 20),
+          if (meters.isEmpty)
+            pw.Padding(
+              padding: const pw.EdgeInsets.symmetric(vertical: 20),
+              child: pw.Center(
+                child: pw.Text(
+                  'Счётчики не добавлены',
+                  style: const pw.TextStyle(color: PdfColors.grey600),
+                ),
+              ),
+            )
+          else ...[
+            pw.Container(
+              padding: const pw.EdgeInsets.symmetric(
+                vertical: 6,
+                horizontal: 6,
+              ),
+              decoration: const pw.BoxDecoration(color: PdfColors.grey300),
+              child: pw.Row(
+                children: [
+                  pw.SizedBox(width: 22, child: _cell('№', bold: true)),
+                  pw.Expanded(flex: 3, child: _cell('Счётчик', bold: true)),
+                  pw.SizedBox(width: 55, child: _cell('Тип', bold: true)),
+                  pw.Expanded(
+                    flex: 2,
+                    child: _cell('Расположение', bold: true),
+                  ),
+                  pw.SizedBox(width: 45, child: _cell('Ед.', bold: true)),
+                  pw.SizedBox(width: 60, child: _cell('Показание', bold: true)),
+                  pw.SizedBox(width: 55, child: _cell('Расход', bold: true)),
+                ],
+              ),
+            ),
+            ...meters.asMap().entries.map((entry) {
+              final i = entry.key;
+              final m = entry.value;
+              final current = findReading(m, period);
+              final prev = findReading(m, prevMonth);
+
+              String readingStr = '—';
+              String consumptionStr = '—';
+
+              if (current != null) {
+                readingStr = '${current['value']}';
+                if (prev != null) {
+                  final diff =
+                      (current['value'] as num) - (prev['value'] as num);
+                  consumptionStr = diff.toStringAsFixed(2);
+                }
+              }
+
+              final typeStr = (m['type'] ?? '').toString();
+              final typeShort = typeStr
+                  .replaceAll('⚡ ', '')
+                  .replaceAll('💧 ', '')
+                  .replaceAll('🔥 ', '')
+                  .replaceAll('🌡️ ', '');
+
+              return pw.Container(
+                padding: const pw.EdgeInsets.symmetric(
+                  vertical: 6,
+                  horizontal: 6,
+                ),
+                decoration: pw.BoxDecoration(
+                  border: pw.Border(
+                    bottom: pw.BorderSide(width: 0.5, color: PdfColors.grey400),
+                  ),
+                ),
+                child: pw.Row(
+                  children: [
+                    pw.SizedBox(width: 22, child: _cell('${i + 1}')),
+                    pw.Expanded(
+                      flex: 3,
+                      child: _cell(m['name']?.toString() ?? ''),
+                    ),
+                    pw.SizedBox(width: 55, child: _cell(typeShort)),
+                    pw.Expanded(
+                      flex: 2,
+                      child: _cell(
+                        (m['location'] ?? '').toString().isEmpty
+                            ? '—'
+                            : m['location'].toString(),
+                      ),
+                    ),
+                    pw.SizedBox(
+                      width: 45,
+                      child: _cell(m['unit']?.toString() ?? ''),
+                    ),
+                    pw.SizedBox(
+                      width: 60,
+                      child: pw.Text(
+                        readingStr,
+                        style: pw.TextStyle(
+                          fontSize: 9,
+                          fontWeight: pw.FontWeight.bold,
+                          color: current != null
+                              ? PdfColors.black
+                              : PdfColors.red700,
+                        ),
+                      ),
+                    ),
+                    pw.SizedBox(width: 55, child: _cell(consumptionStr)),
+                  ],
+                ),
+              );
+            }).toList(),
+          ],
+          pw.SizedBox(height: 20),
+          if (meters.any((m) => findReading(m, period) == null))
+            pw.Container(
+              padding: const pw.EdgeInsets.all(8),
+              decoration: pw.BoxDecoration(
+                color: PdfColors.orange100,
+                borderRadius: pw.BorderRadius.circular(4),
+                border: pw.Border.all(color: PdfColors.orange),
+              ),
+              child: pw.Text(
+                '⚠ Нет показаний за $periodLabel у ${meters.where((m) => findReading(m, period) == null).length} счётчик(ов). '
+                'Напоминание: показания сдаются до 25-го числа.',
+                style: const pw.TextStyle(
+                  fontSize: 9,
+                  color: PdfColors.orange800,
+                ),
+              ),
+            ),
+          pw.SizedBox(height: 30),
+          pw.Divider(color: PdfColors.grey400),
+          pw.SizedBox(height: 8),
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            children: [
+              pw.Text(
+                'Подпись механика: _______________________',
+                style: const pw.TextStyle(
+                  fontSize: 10,
+                  color: PdfColors.grey700,
+                ),
+              ),
+              pw.Text(
+                'Дата: _______________',
+                style: const pw.TextStyle(
+                  fontSize: 10,
+                  color: PdfColors.grey700,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    await Printing.layoutPdf(
+      onLayout: (format) async => doc.save(),
+      name: 'Ведомость показаний — $periodLabel.pdf',
+    );
+  }
+
+  // ============================================================
+  //  ВСПОМОГАТЕЛЬНЫЕ ВИДЖЕТЫ
+  // ============================================================
   static pw.Widget _cell(String text, {bool bold = false}) {
     return pw.Text(
       text,

@@ -777,7 +777,7 @@ class _TasksScreenState extends State<TasksScreen> {
                                       ),
                                       const SizedBox(width: 4),
                                       Text(
-                                        c['author'] ?? 'Мастер',
+                                        c['author'] ?? 'Механик',
                                         style: const TextStyle(
                                           fontSize: 12,
                                           fontWeight: FontWeight.w500,

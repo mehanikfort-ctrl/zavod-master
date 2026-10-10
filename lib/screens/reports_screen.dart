@@ -95,6 +95,44 @@ class _ReportsScreenState extends State<ReportsScreen> {
     await _generate(title: 'Отчёт за месяц', start: start, end: end);
   }
 
+  Future<void> _generateMeterReport() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: now,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2030),
+      helpText: 'Выберите месяц для ведомости',
+    );
+    if (picked == null) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final rawMeters = prefs.getString('meters');
+    if (rawMeters == null || rawMeters.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Счётчики не добавлены')));
+      }
+      return;
+    }
+    final meters = (jsonDecode(rawMeters) as List)
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+
+    setState(() => isGenerating = true);
+    try {
+      await PdfService.generateMeterReport(period: picked, meters: meters);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Ошибка генерации: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => isGenerating = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (isLoading) {
@@ -140,6 +178,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
           title: 'Отчёт за месяц',
           subtitle: '${now.month.toString().padLeft(2, '0')}.${now.year}',
           onTap: _generateMonth,
+        ),
+
+        const SizedBox(height: 12),
+        _reportCard(
+          icon: Icons.speed,
+          title: 'Ведомость показаний счётчиков',
+          subtitle: 'Выбрать месяц — расход по каждому счётчику',
+          onTap: _generateMeterReport,
         ),
 
         const SizedBox(height: 30),
