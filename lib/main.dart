@@ -129,7 +129,9 @@ class _MainScreenState extends State<MainScreen> {
 
   Future<void> _initNotifications() async {
     await NotificationService().init();
+    await NotificationService().cancelAll(); // отменяем устаревшие
     await _scheduleUpcomingNotifications();
+    await _scheduleRegulationNotifications();
   }
 
   Future<void> _scheduleUpcomingNotifications() async {
@@ -181,6 +183,74 @@ class _MainScreenState extends State<MainScreen> {
           body: task['title'] ?? '',
           dateTime: notifyTime,
         );
+      }
+    }
+  }
+
+  /// Планирует уведомления для всех активных регламентов на месяц вперёд.
+  Future<void> _scheduleRegulationNotifications() async {
+    final prefs = await SharedPreferences.getInstance();
+    final rawRegs = prefs.getString('regulations');
+    if (rawRegs == null || rawRegs.isEmpty) return;
+
+    final List<dynamic> decoded = jsonDecode(rawRegs);
+    final List<Map<String, dynamic>> regs = decoded
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    int id = 5000;
+
+    for (final reg in regs) {
+      if (reg['enabled'] != true) continue;
+
+      final title = reg['title']?.toString() ?? 'Регламент';
+      final type = reg['type'];
+      final upcoming = <DateTime>[];
+
+      if (type == 'daily') {
+        // Каждый день на 30 дней вперёд
+        for (int i = 1; i <= 30; i++) {
+          upcoming.add(today.add(Duration(days: i)));
+        }
+      } else if (type == 'weekly') {
+        final wd = reg['weekday'] as int?;
+        if (wd != null) {
+          for (int i = 1; i < 70 && upcoming.length < 10; i++) {
+            final d = today.add(Duration(days: i));
+            if (d.weekday == wd) upcoming.add(d);
+          }
+        }
+      } else if (type == 'monthly') {
+        final day = reg['dayOfMonth'] as int?;
+        if (day != null) {
+          for (int i = 0; i < 6; i++) {
+            final month = DateTime(now.year, now.month + i, day);
+            if (month.isAfter(today)) upcoming.add(month);
+          }
+        }
+      }
+
+      for (final d in upcoming) {
+        // Напоминаем за день до события, в 9:00
+        final notifyDay = d.subtract(const Duration(days: 1));
+        final notifyTime = DateTime(
+          notifyDay.year,
+          notifyDay.month,
+          notifyDay.day,
+          9,
+          0,
+        );
+
+        if (notifyTime.isAfter(now)) {
+          await NotificationService().scheduleAt(
+            id: id++,
+            title: 'Напоминание: $title',
+            body: 'Завтра нужно: $title',
+            dateTime: notifyTime,
+          );
+        }
       }
     }
   }
