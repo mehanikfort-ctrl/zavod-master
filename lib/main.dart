@@ -6,6 +6,7 @@ import 'screens/meters_screen.dart';
 import 'screens/reports_screen.dart';
 import 'screens/regulations_screen.dart';
 import 'notification_service.dart';
+import 'screens/dashboard_screen.dart';
 
 import 'dart:convert';
 
@@ -102,6 +103,7 @@ class _MainScreenState extends State<MainScreen> {
   int _currentIndex = 0;
 
   final List<Widget> _screens = const [
+    DashboardScreen(),
     TasksScreen(),
     EquipmentScreen(),
     MetersScreen(),
@@ -110,6 +112,7 @@ class _MainScreenState extends State<MainScreen> {
   ];
 
   final List<String> _titles = const [
+    'Главная',
     'Мои задачи',
     'Оборудование',
     'Счётчики',
@@ -288,6 +291,11 @@ class _MainScreenState extends State<MainScreen> {
           setState(() => _currentIndex = index);
         },
         destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.dashboard_outlined),
+            selectedIcon: Icon(Icons.dashboard),
+            label: 'Главная',
+          ),
           NavigationDestination(
             icon: Icon(Icons.check_circle_outline),
             selectedIcon: Icon(Icons.check_circle),
