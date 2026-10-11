@@ -1,23 +1,66 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'screens/tasks_screen.dart';
 import 'screens/equipment_screen.dart';
 import 'screens/meters_screen.dart';
 import 'screens/reports_screen.dart';
 import 'screens/regulations_screen.dart';
+import 'notification_service.dart';
+
+import 'dart:convert';
+
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  runApp(const ZavodMasterApp());
+  runApp(const ZavodMechanikApp());
 }
 
-class ZavodMasterApp extends StatelessWidget {
-  const ZavodMasterApp({super.key});
+class ZavodMechanikApp extends StatefulWidget {
+  const ZavodMechanikApp({super.key});
+
+  @override
+  State<ZavodMechanikApp> createState() => _ZavodMechanikAppState();
+}
+
+class _ZavodMechanikAppState extends State<ZavodMechanikApp> {
+  ThemeMode _themeMode = ThemeMode.light;
+  bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTheme();
+  }
+
+  Future<void> _loadTheme() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString('themeMode') ?? 'light';
+    setState(() {
+      _themeMode = saved == 'dark' ? ThemeMode.dark : ThemeMode.light;
+      _loaded = true;
+    });
+  }
+
+  Future<void> _toggleTheme() async {
+    final newMode = _themeMode == ThemeMode.dark
+        ? ThemeMode.light
+        : ThemeMode.dark;
+    setState(() => _themeMode = newMode);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      'themeMode',
+      newMode == ThemeMode.dark ? 'dark' : 'light',
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    if (!_loaded) {
+      return const MaterialApp(
+        home: Scaffold(body: Center(child: CircularProgressIndicator())),
+      );
+    }
+
     return MaterialApp(
       title: 'Завод-Механик',
       debugShowCheckedModeBanner: false,
@@ -28,13 +71,28 @@ class ZavodMasterApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const MainScreen(),
+      darkTheme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF1B5E20),
+          brightness: Brightness.dark,
+        ),
+        useMaterial3: true,
+      ),
+      themeMode: _themeMode,
+      home: MainScreen(themeMode: _themeMode, onToggleTheme: _toggleTheme),
     );
   }
 }
 
 class MainScreen extends StatefulWidget {
-  const MainScreen({super.key});
+  final ThemeMode themeMode;
+  final VoidCallback onToggleTheme;
+
+  const MainScreen({
+    super.key,
+    required this.themeMode,
+    required this.onToggleTheme,
+  });
 
   @override
   State<MainScreen> createState() => _MainScreenState();
@@ -62,10 +120,68 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void initState() {
     super.initState();
+    _initNotifications();
     _checkRegulations();
   }
 
-  /// Проверяет все регламенты и создаёт задачи, если пришло время
+  Future<void> _initNotifications() async {
+    await NotificationService().init();
+    await _scheduleUpcomingNotifications();
+  }
+
+  Future<void> _scheduleUpcomingNotifications() async {
+    final prefs = await SharedPreferences.getInstance();
+    final rawTasks = prefs.getString('tasks');
+    if (rawTasks == null || rawTasks.isEmpty) return;
+
+    final List<dynamic> decoded = jsonDecode(rawTasks);
+    final List<Map<String, dynamic>> tasks = decoded
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+
+    final now = DateTime.now();
+    int id = 1000;
+
+    for (final task in tasks) {
+      if (task['completed'] == true) continue;
+
+      final timeStr = task['time']?.toString() ?? '';
+      final dateMatch = RegExp(r'(\d{2})\.(\d{2})\.(\d{4})')
+          .firstMatch(timeStr);
+      if (dateMatch == null) continue;
+
+      final timeMatch = RegExp(r'(\d{2}):(\d{2})').firstMatch(timeStr);
+      final hour = timeMatch != null ? int.parse(timeMatch.group(1)!) : 9;
+      final minute = timeMatch != null ? int.parse(timeMatch.group(2)!) : 0;
+
+      final scheduledDate = DateTime(
+        int.parse(dateMatch.group(3)!),
+        int.parse(dateMatch.group(2)!),
+        int.parse(dateMatch.group(1)!),
+        hour,
+        minute,
+      );
+
+      final notifyAt = scheduledDate.subtract(const Duration(days: 1));
+      final notifyTime = DateTime(
+        notifyAt.year,
+        notifyAt.month,
+        notifyAt.day,
+        9,
+        0,
+      );
+
+      if (notifyTime.isAfter(now)) {
+        await NotificationService().scheduleAt(
+          id: id++,
+          title: 'Напоминание о задаче',
+          body: task['title'] ?? '',
+          dateTime: notifyTime,
+        );
+      }
+    }
+  }
+
   Future<void> _checkRegulations() async {
     final prefs = await SharedPreferences.getInstance();
 
@@ -131,6 +247,9 @@ class _MainScreenState extends State<MainScreen> {
               '${now.day.toString().padLeft(2, '0')}.${now.month.toString().padLeft(2, '0')}.${now.year}',
           'equipmentId': reg['equipmentId'],
           'fromRegulation': reg['id'],
+          'completed': false,
+          'comments': <Map<String, dynamic>>[],
+          'photos': <String>[],
         });
         reg['lastRun'] = now.toIso8601String();
         changed = true;
@@ -145,11 +264,22 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(_titles[_currentIndex]),
-        backgroundColor: const Color(0xFF1B5E20),
-        foregroundColor: Colors.white,
+        backgroundColor: isDark
+            ? Theme.of(context).colorScheme.surfaceContainerHighest
+            : const Color(0xFF1B5E20),
+        foregroundColor: isDark ? null : Colors.white,
+        actions: [
+          IconButton(
+            tooltip: isDark ? 'Светлая тема' : 'Тёмная тема',
+            icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
+            onPressed: widget.onToggleTheme,
+          ),
+        ],
       ),
       body: _screens[_currentIndex],
       bottomNavigationBar: NavigationBar(

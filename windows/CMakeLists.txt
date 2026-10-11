@@ -1,6 +1,8 @@
 # Project-level configuration.
 cmake_minimum_required(VERSION 3.14)
-project(zavod_master LANGUAGES CXX)
+project(zavod_master)
+# Fix for MSVC 14.51 coroutine deprecation error in plugins
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS")
 
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
@@ -109,4 +111,3 @@ install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
   COMPONENT Runtime)
 # Временное решение для совместимости flutter_local_notifications с MSVC 14.51+
-add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
