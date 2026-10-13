@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../backup_service.dart';
+
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
 
@@ -64,7 +66,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  // Задачи на сегодня
   List<Map<String, dynamic>> get _todayTasks {
     final now = DateTime.now();
     return tasks.where((t) {
@@ -75,7 +76,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }).toList();
   }
 
-  // Просроченные задачи (дата раньше сегодня, ещё не выполнены)
   List<Map<String, dynamic>> get _overdueTasks {
     final now = DateTime.now();
     final todayStart = DateTime(now.year, now.month, now.day);
@@ -95,7 +95,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int get _activeCount => tasks.where((t) => t['completed'] != true).length;
   int get _doneCount => tasks.where((t) => t['completed'] == true).length;
 
-  // Последние показания каждого счётчика
   List<Map<String, dynamic>> get _recentReadings {
     final result = <Map<String, dynamic>>[];
     for (final m in meters) {
@@ -118,6 +117,87 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return result;
   }
 
+  // ============ ЭКСПОРТ / ИМПОРТ ============
+
+  Future<void> _exportData() async {
+    try {
+      final path = await BackupService.exportAll();
+      if (path != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Бэкап сохранён: ${path.split(RegExp(r'[\\/]')).last}',
+            ),
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Ошибка экспорта: $e')));
+      }
+    }
+  }
+
+  Future<void> _importData() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Импорт данных'),
+        content: const Text(
+          'ВНИМАНИЕ! Все текущие данные будут удалены и заменены '
+          'данными из резервной копии.\n\nПродолжить?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Отмена'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Импортировать'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      final ok = await BackupService.importAll();
+      if (!mounted) return;
+      if (ok) {
+        await _load();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Данные восстановлены. Перезапустите приложение, чтобы применить тему.',
+              ),
+              duration: Duration(seconds: 6),
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Импорт отменён или файл некорректен'),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Ошибка импорта: $e')));
+      }
+    }
+  }
+
+  // ============ BUILD ============
+
   @override
   Widget build(BuildContext context) {
     if (isLoading) {
@@ -132,7 +212,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       child: ListView(
         padding: const EdgeInsets.all(14),
         children: [
-          // Приветствие по времени суток
           Text(
             _greeting(),
             style: TextStyle(
@@ -197,7 +276,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: 22),
 
-          // Просроченные задачи
+          // Просроченные
           if (_overdueTasks.isNotEmpty) ...[
             _sectionTitle(
               context,
@@ -258,7 +337,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             }),
           const SizedBox(height: 22),
 
-          // Последние показания счётчиков
+          // Последние показания
           if (_recentReadings.isNotEmpty) ...[
             _sectionTitle(
               context,
@@ -299,6 +378,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
               trailing: '${equipment.length}',
               trailingColor: const Color(0xFF1B5E20),
             ),
+          const SizedBox(height: 22),
+
+          // Резервная копия
+          _sectionTitle(
+            context,
+            icon: Icons.backup,
+            iconColor: Colors.teal,
+            title: 'Резервная копия',
+            count: 2,
+          ),
+          const SizedBox(height: 8),
+          _backupCard(
+            icon: Icons.download,
+            color: Colors.teal,
+            title: 'Экспортировать все данные',
+            subtitle: 'Задачи, оборудование, счётчики, фото, файлы',
+            buttonText: 'Экспорт',
+            onTap: _exportData,
+          ),
+          const SizedBox(height: 8),
+          _backupCard(
+            icon: Icons.upload,
+            color: Colors.orange,
+            title: 'Импортировать из файла',
+            subtitle: '⚠ Заменит все текущие данные',
+            buttonText: 'Импорт',
+            onTap: _importData,
+          ),
 
           const SizedBox(height: 40),
         ],
@@ -451,6 +558,73 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 fontWeight: FontWeight.bold,
                 color: trailingColor,
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _backupCard({
+    required IconData icon,
+    required Color color,
+    required String title,
+    required String subtitle,
+    required String buttonText,
+    required VoidCallback onTap,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Card(
+      margin: EdgeInsets.zero,
+      elevation: 0,
+      color: isDark ? Colors.grey.shade900 : Colors.grey.shade50,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: BorderSide(
+          color: isDark ? Colors.grey.shade800 : Colors.grey.shade200,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            CircleAvatar(
+              backgroundColor: color.withOpacity(0.15),
+              child: Icon(icon, color: color, size: 22),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            ElevatedButton(
+              onPressed: onTap,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: color,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 8,
+                ),
+                minimumSize: Size.zero,
+              ),
+              child: Text(buttonText, style: const TextStyle(fontSize: 12)),
             ),
           ],
         ),
