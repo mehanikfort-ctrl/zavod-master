@@ -1,3 +1,6 @@
+import 'screens/warehouse_screen.dart';
+import 'screens/statistics_screen.dart';
+
 import 'package:flutter/material.dart';
 
 import 'screens/tasks_screen.dart';
@@ -106,6 +109,7 @@ class _MainScreenState extends State<MainScreen> {
     DashboardScreen(),
     TasksScreen(),
     EquipmentScreen(),
+    WarehouseScreen(),
     MetersScreen(),
     RegulationsScreen(),
     ReportsScreen(),
@@ -115,6 +119,7 @@ class _MainScreenState extends State<MainScreen> {
     'Главная',
     'Мои задачи',
     'Оборудование',
+    'Склад',
     'Счётчики',
     'Регламенты',
     'Отчёты',
@@ -417,6 +422,11 @@ class _MainScreenState extends State<MainScreen> {
             icon: Icon(Icons.build_outlined),
             selectedIcon: Icon(Icons.build),
             label: 'Оборудование',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.inventory_2_outlined),
+            selectedIcon: Icon(Icons.inventory_2),
+            label: 'Склад',
           ),
           NavigationDestination(
             icon: Icon(Icons.speed_outlined),

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../backup_service.dart';
+import 'statistics_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -405,6 +406,71 @@ class _DashboardScreenState extends State<DashboardScreen> {
             subtitle: '⚠ Заменит все текущие данные',
             buttonText: 'Импорт',
             onTap: _importData,
+          ),
+          // Статистика
+          _sectionTitle(
+            context,
+            icon: Icons.insights,
+            iconColor: Colors.purple,
+            title: 'Статистика',
+            count: 1,
+          ),
+          const SizedBox(height: 8),
+          Card(
+            margin: EdgeInsets.zero,
+            elevation: 0,
+            color: isDark ? Colors.grey.shade900 : Colors.grey.shade50,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+              side: BorderSide(
+                color: isDark ? Colors.grey.shade800 : Colors.grey.shade200,
+              ),
+            ),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const StatisticsScreen()),
+                );
+              },
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      backgroundColor: Colors.purple.withOpacity(0.15),
+                      child: const Icon(
+                        Icons.insights,
+                        color: Colors.purple,
+                        size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Статистика за месяц',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            'Задачи, категории, топ оборудования',
+                            style: TextStyle(fontSize: 11, color: Colors.grey),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.chevron_right, color: Colors.grey),
+                  ],
+                ),
+              ),
+            ),
           ),
 
           const SizedBox(height: 40),
