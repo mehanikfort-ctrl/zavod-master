@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../category_style.dart';
+
 class WarehouseCategoriesScreen extends StatefulWidget {
   const WarehouseCategoriesScreen({super.key});
 
@@ -35,43 +37,58 @@ class _WarehouseCategoriesScreenState extends State<WarehouseCategoriesScreen> {
           .toList();
       for (final c in categories) {
         c.putIfAbsent('subcategories', () => <Map<String, dynamic>>[]);
+        c.putIfAbsent('icon', () => 'category');
+        c.putIfAbsent('color', () => 'green');
       }
     } else {
-      // Дефолтные категории
       categories = [
         {
           'id': 'cat_mech',
           'name': 'Механика',
+          'icon': 'mechanic',
+          'color': 'green',
           'subcategories': <Map<String, dynamic>>[],
         },
         {
           'id': 'cat_el',
           'name': 'Электрика',
+          'icon': 'electric',
+          'color': 'orange',
           'subcategories': <Map<String, dynamic>>[],
         },
         {
           'id': 'cat_water',
           'name': 'Сантехника',
+          'icon': 'water',
+          'color': 'blue',
           'subcategories': <Map<String, dynamic>>[],
         },
         {
           'id': 'cat_gas',
           'name': 'Газ',
+          'icon': 'gas',
+          'color': 'red',
           'subcategories': <Map<String, dynamic>>[],
         },
         {
           'id': 'cat_cons',
           'name': 'Расходники',
+          'icon': 'consumable',
+          'color': 'purple',
           'subcategories': <Map<String, dynamic>>[],
         },
         {
           'id': 'cat_fast',
           'name': 'Крепёж',
+          'icon': 'fastener',
+          'color': 'indigo',
           'subcategories': <Map<String, dynamic>>[],
         },
         {
           'id': 'cat_other',
           'name': 'Прочее',
+          'icon': 'box',
+          'color': 'grey',
           'subcategories': <Map<String, dynamic>>[],
         },
       ];
@@ -108,6 +125,192 @@ class _WarehouseCategoriesScreenState extends State<WarehouseCategoriesScreen> {
         .length;
   }
 
+  // ============ ДИАЛОГ КАТЕГОРИИ ============
+
+  Future<void> _showCategoryDialog({int? editIndex}) async {
+    final isEdit = editIndex != null;
+    final existing = isEdit ? categories[editIndex] : null;
+
+    final nameCtrl = TextEditingController(text: existing?['name'] ?? '');
+    String iconKey = existing?['icon']?.toString() ?? 'category';
+    String colorKey = existing?['color']?.toString() ?? 'green';
+
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final color = getCategoryColor(colorKey);
+            return AlertDialog(
+              title: Text(
+                isEdit ? 'Редактировать категорию' : 'Новая категория',
+              ),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Превью
+                      Center(
+                        child: Container(
+                          width: 70,
+                          height: 70,
+                          decoration: BoxDecoration(
+                            color: color.withOpacity(0.15),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: color, width: 2),
+                          ),
+                          child: Icon(
+                            getCategoryIcon(iconKey),
+                            color: color,
+                            size: 36,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: nameCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Название',
+                          hintText: 'Механика',
+                        ),
+                        autofocus: !isEdit,
+                      ),
+                      const SizedBox(height: 20),
+                      const Text(
+                        'Иконка',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: categoryIcons.entries.map((e) {
+                          final isSel = iconKey == e.key;
+                          return InkWell(
+                            borderRadius: BorderRadius.circular(10),
+                            onTap: () => setDialogState(() => iconKey = e.key),
+                            child: Container(
+                              width: 44,
+                              height: 44,
+                              decoration: BoxDecoration(
+                                color: isSel
+                                    ? color.withOpacity(0.2)
+                                    : Colors.grey.shade100,
+                                borderRadius: BorderRadius.circular(10),
+                                border: isSel
+                                    ? Border.all(color: color, width: 2)
+                                    : null,
+                              ),
+                              child: Icon(
+                                e.value,
+                                color: isSel ? color : Colors.grey.shade700,
+                                size: 22,
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                      const SizedBox(height: 20),
+                      const Text(
+                        'Цвет',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        children: categoryColors.entries.map((e) {
+                          final isSel = colorKey == e.key;
+                          return InkWell(
+                            borderRadius: BorderRadius.circular(20),
+                            onTap: () => setDialogState(() => colorKey = e.key),
+                            child: Container(
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                color: e.value,
+                                shape: BoxShape.circle,
+                                border: isSel
+                                    ? Border.all(color: Colors.white, width: 3)
+                                    : null,
+                                boxShadow: isSel
+                                    ? [
+                                        BoxShadow(
+                                          color: e.value.withOpacity(0.5),
+                                          blurRadius: 8,
+                                        ),
+                                      ]
+                                    : null,
+                              ),
+                              child: isSel
+                                  ? const Icon(
+                                      Icons.check,
+                                      color: Colors.white,
+                                      size: 20,
+                                    )
+                                  : null,
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Отмена'),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1B5E20),
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: () async {
+                    final name = nameCtrl.text.trim();
+                    if (name.isEmpty) return;
+                    setState(() {
+                      if (isEdit) {
+                        categories[editIndex]['name'] = name;
+                        categories[editIndex]['icon'] = iconKey;
+                        categories[editIndex]['color'] = colorKey;
+                      } else {
+                        categories.add({
+                          'id': 'cat_${DateTime.now().millisecondsSinceEpoch}',
+                          'name': name,
+                          'icon': iconKey,
+                          'color': colorKey,
+                          'subcategories': <Map<String, dynamic>>[],
+                        });
+                      }
+                    });
+                    await _saveCategories();
+                    if (context.mounted) Navigator.pop(context);
+                  },
+                  child: Text(isEdit ? 'Сохранить' : 'Создать'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // ============ ПОДКАТЕГОРИИ ============
+
   Future<String?> _askName({required String title, String? initial}) async {
     final ctrl = TextEditingController(text: initial ?? '');
     return showDialog<String>(
@@ -138,70 +341,6 @@ class _WarehouseCategoriesScreenState extends State<WarehouseCategoriesScreen> {
         ],
       ),
     );
-  }
-
-  Future<void> _addCategory() async {
-    final name = await _askName(title: 'Новая категория');
-    if (name == null) return;
-    setState(() {
-      categories.add({
-        'id': 'cat_${DateTime.now().millisecondsSinceEpoch}',
-        'name': name,
-        'subcategories': <Map<String, dynamic>>[],
-      });
-    });
-    await _saveCategories();
-  }
-
-  Future<void> _renameCategory(int index) async {
-    final name = await _askName(
-      title: 'Переименовать категорию',
-      initial: categories[index]['name']?.toString(),
-    );
-    if (name == null) return;
-    setState(() => categories[index]['name'] = name);
-    await _saveCategories();
-  }
-
-  Future<void> _deleteCategory(int index) async {
-    final catId = categories[index]['id'].toString();
-    final count = _countInCategory(catId);
-
-    String msg = 'Удалить категорию «${categories[index]['name']}»?';
-    if (count > 0) {
-      msg += '\n\nВ ней $count запчастей — они останутся без категории.';
-    }
-
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Удалить категорию?'),
-        content: Text(msg),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Отмена'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Удалить'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true) return;
-
-    // Отвязываем запчасти
-    for (final it in items) {
-      if (it['categoryId'] == catId) {
-        it.remove('categoryId');
-        it.remove('subcategoryId');
-      }
-    }
-    setState(() => categories.removeAt(index));
-    await _saveCategories();
-    await _saveItems();
   }
 
   Future<void> _addSubcategory(int catIndex) async {
@@ -270,6 +409,46 @@ class _WarehouseCategoriesScreenState extends State<WarehouseCategoriesScreen> {
     await _saveItems();
   }
 
+  Future<void> _deleteCategory(int index) async {
+    final catId = categories[index]['id'].toString();
+    final count = _countInCategory(catId);
+
+    String msg = 'Удалить категорию «${categories[index]['name']}»?';
+    if (count > 0) {
+      msg += '\n\nВ ней $count запчастей — они останутся без категории.';
+    }
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Удалить категорию?'),
+        content: Text(msg),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Отмена'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Удалить'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    for (final it in items) {
+      if (it['categoryId'] == catId) {
+        it.remove('categoryId');
+        it.remove('subcategoryId');
+      }
+    }
+    setState(() => categories.removeAt(index));
+    await _saveCategories();
+    await _saveItems();
+  }
+
   @override
   Widget build(BuildContext context) {
     if (isLoading) {
@@ -301,6 +480,8 @@ class _WarehouseCategoriesScreenState extends State<WarehouseCategoriesScreen> {
                     .map((e) => Map<String, dynamic>.from(e))
                     .toList();
                 final count = _countInCategory(cat['id'].toString());
+                final color = getCategoryColor(cat['color']?.toString());
+                final icon = getCategoryIcon(cat['icon']?.toString());
 
                 return Card(
                   margin: const EdgeInsets.only(bottom: 10),
@@ -317,9 +498,9 @@ class _WarehouseCategoriesScreenState extends State<WarehouseCategoriesScreen> {
                   child: ExpansionTile(
                     tilePadding: const EdgeInsets.symmetric(horizontal: 12),
                     childrenPadding: const EdgeInsets.only(bottom: 8),
-                    leading: const Icon(
-                      Icons.category_outlined,
-                      color: Color(0xFF1B5E20),
+                    leading: CircleAvatar(
+                      backgroundColor: color.withOpacity(0.15),
+                      child: Icon(icon, color: color, size: 22),
                     ),
                     title: Text(
                       cat['name'] ?? '',
@@ -334,17 +515,19 @@ class _WarehouseCategoriesScreenState extends State<WarehouseCategoriesScreen> {
                     ),
                     trailing: PopupMenuButton<String>(
                       onSelected: (v) {
-                        if (v == 'rename') _renameCategory(i);
+                        if (v == 'edit') {
+                          _showCategoryDialog(editIndex: i);
+                        }
                         if (v == 'delete') _deleteCategory(i);
                       },
                       itemBuilder: (context) => const [
                         PopupMenuItem(
-                          value: 'rename',
+                          value: 'edit',
                           child: Row(
                             children: [
                               Icon(Icons.edit, size: 18),
                               SizedBox(width: 8),
-                              Text('Переименовать'),
+                              Text('Редактировать'),
                             ],
                           ),
                         ),
@@ -377,10 +560,10 @@ class _WarehouseCategoriesScreenState extends State<WarehouseCategoriesScreen> {
                             left: 40,
                             right: 8,
                           ),
-                          leading: const Icon(
+                          leading: Icon(
                             Icons.subdirectory_arrow_right,
                             size: 16,
-                            color: Colors.grey,
+                            color: color,
                           ),
                           title: Text(
                             sub['name'] ?? '',
@@ -442,7 +625,7 @@ class _WarehouseCategoriesScreenState extends State<WarehouseCategoriesScreen> {
               },
             ),
       floatingActionButton: FloatingActionButton(
-        onPressed: _addCategory,
+        onPressed: () => _showCategoryDialog(),
         backgroundColor: const Color(0xFF1B5E20),
         foregroundColor: Colors.white,
         child: const Icon(Icons.add),

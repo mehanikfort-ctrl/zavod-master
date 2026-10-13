@@ -1,11 +1,11 @@
-import '../pdf_service.dart';
-
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'warehouse_categories_screen.dart';
+import '../category_style.dart';
+import '../pdf_service.dart';
 
 class WarehouseScreen extends StatefulWidget {
   const WarehouseScreen({super.key});
@@ -20,8 +20,8 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
   bool isLoading = true;
   String searchQuery = '';
   String sortMode = 'name';
-  String? categoryFilter; // categoryId
-  String? subcategoryFilter; // subcategoryId
+  String? categoryFilter;
+  String? subcategoryFilter;
 
   static const String _itemsKey = 'warehouse';
   static const String _categoriesKey = 'warehouse_categories';
@@ -35,7 +35,6 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
 
-    // Категории
     final rawCats = prefs.getString(_categoriesKey);
     if (rawCats != null && rawCats.isNotEmpty) {
       categories = (jsonDecode(rawCats) as List)
@@ -43,49 +42,64 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
           .toList();
       for (final c in categories) {
         c.putIfAbsent('subcategories', () => <Map<String, dynamic>>[]);
+        c.putIfAbsent('icon', () => 'category');
+        c.putIfAbsent('color', () => 'green');
       }
     } else {
       categories = [
         {
           'id': 'cat_mech',
           'name': 'Механика',
+          'icon': 'mechanic',
+          'color': 'green',
           'subcategories': <Map<String, dynamic>>[],
         },
         {
           'id': 'cat_el',
           'name': 'Электрика',
+          'icon': 'electric',
+          'color': 'orange',
           'subcategories': <Map<String, dynamic>>[],
         },
         {
           'id': 'cat_water',
           'name': 'Сантехника',
+          'icon': 'water',
+          'color': 'blue',
           'subcategories': <Map<String, dynamic>>[],
         },
         {
           'id': 'cat_gas',
           'name': 'Газ',
+          'icon': 'gas',
+          'color': 'red',
           'subcategories': <Map<String, dynamic>>[],
         },
         {
           'id': 'cat_cons',
           'name': 'Расходники',
+          'icon': 'consumable',
+          'color': 'purple',
           'subcategories': <Map<String, dynamic>>[],
         },
         {
           'id': 'cat_fast',
           'name': 'Крепёж',
+          'icon': 'fastener',
+          'color': 'indigo',
           'subcategories': <Map<String, dynamic>>[],
         },
         {
           'id': 'cat_other',
           'name': 'Прочее',
+          'icon': 'box',
+          'color': 'grey',
           'subcategories': <Map<String, dynamic>>[],
         },
       ];
       await prefs.setString(_categoriesKey, jsonEncode(categories));
     }
 
-    // Запчасти + миграция старых
     final rawItems = prefs.getString(_itemsKey);
     if (rawItems != null && rawItems.isNotEmpty) {
       items = (jsonDecode(rawItems) as List)
@@ -94,10 +108,8 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
 
       bool migrated = false;
       for (final item in items) {
-        // Если уже есть categoryId — пропускаем
         if (item['categoryId'] != null) continue;
 
-        // Старое поле 'category' (строка вида "🔧 Механика") → ищем категорию по имени
         final oldName = item['category']?.toString();
         if (oldName != null && oldName.isNotEmpty) {
           final cleanName = oldName
@@ -115,7 +127,6 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
           }
         }
 
-        // Если всё ещё нет — в «Прочее»
         if (item['categoryId'] == null) {
           final other = categories.firstWhere(
             (c) => c['name'] == 'Прочее' || c['id'] == 'cat_other',
@@ -126,7 +137,7 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
             item['categoryId'] = other['id'];
           }
         }
-        item.remove('category'); // старое поле больше не нужно
+        item.remove('category');
         migrated = true;
       }
       if (migrated) await _saveItems();
@@ -150,6 +161,8 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
             .toList();
         for (final c in categories) {
           c.putIfAbsent('subcategories', () => <Map<String, dynamic>>[]);
+          c.putIfAbsent('icon', () => 'category');
+          c.putIfAbsent('color', () => 'green');
         }
       });
     }
@@ -223,339 +236,6 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
     }
     return list;
   }
-  // ============ ЗАЯВКА НА ЗАКУПКУ ============
-
-  Future<void> _openPurchaseRequest() async {
-    if (items.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Склад пуст — нечего заказывать')),
-      );
-      return;
-    }
-
-    // Порядок: сначала дефицитные, потом остальные
-    final sorted = items.toList()
-      ..sort((a, b) {
-        final aLow = _isOut(a) || _isLow(a);
-        final bLow = _isOut(b) || _isLow(b);
-        if (aLow == bLow) {
-          return (a['name'] ?? '').toString().toLowerCase().compareTo(
-            (b['name'] ?? '').toString().toLowerCase(),
-          );
-        }
-        return aLow ? -1 : 1;
-      });
-
-    // Храним выбранные: id → orderQuantity
-    final Map<String, int> selected = {};
-    final Map<String, TextEditingController> qtyCtrls = {};
-
-    for (final it in sorted) {
-      final id = it['id'].toString();
-      final qty = (it['quantity'] as num?)?.toInt() ?? 0;
-      final min = (it['minQuantity'] as num?)?.toInt() ?? 0;
-      final isOut = qty <= 0;
-      final isLow = !isOut && min > 0 && qty <= min;
-
-      // По умолчанию: дефицитные отмечаем
-      // По умолчанию: дефицитные отмечаем
-      // Целевой остаток = 2 × минимум. Заказ = (2 × минимум) − текущий остаток.
-      if (isOut || isLow) {
-        final target = min > 0 ? min * 2 : 2;
-        final need = target - qty;
-        selected[id] = need > 0 ? need : 1;
-      }
-      qtyCtrls[id] = TextEditingController(
-        text: selected[id]?.toString() ?? '1',
-      );
-    }
-
-    if (!mounted) return;
-
-    await showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setSheetState) {
-            return Padding(
-              padding: EdgeInsets.only(
-                bottom: MediaQuery.of(context).viewInsets.bottom,
-              ),
-              child: SizedBox(
-                height: MediaQuery.of(context).size.height * 0.85,
-                child: Column(
-                  children: [
-                    // Шапка
-                    Container(
-                      padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.description_outlined,
-                            color: Colors.red,
-                          ),
-                          const SizedBox(width: 8),
-                          const Text(
-                            'Заявка на закупку',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const Spacer(),
-                          IconButton(
-                            icon: const Icon(Icons.close),
-                            onPressed: () => Navigator.pop(context),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Divider(height: 1),
-
-                    // Подсказка
-                    Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.info_outline,
-                            size: 16,
-                            color: Colors.grey.shade600,
-                          ),
-                          const SizedBox(width: 6),
-                          Expanded(
-                            child: Text(
-                              'Отметь позиции для заказа. Дефицитные отмечены автоматически.',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: Colors.grey.shade700,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    // Список
-                    Expanded(
-                      child: ListView.builder(
-                        itemCount: sorted.length,
-                        itemBuilder: (context, i) {
-                          final it = sorted[i];
-                          final id = it['id'].toString();
-                          final isSelected = selected.containsKey(id);
-                          final qty = (it['quantity'] as num?)?.toInt() ?? 0;
-                          final min = (it['minQuantity'] as num?)?.toInt() ?? 0;
-                          final isOut = qty <= 0;
-                          final isLow = !isOut && min > 0 && qty <= min;
-
-                          return CheckboxListTile(
-                            value: isSelected,
-                            onChanged: (v) {
-                              setSheetState(() {
-                                if (v == true) {
-                                  final target = min > 0 ? min * 2 : 2;
-                                  final need = target - qty;
-                                  selected[id] = need > 0 ? need : 1;
-                                  qtyCtrls[id]?.text = selected[id].toString();
-                                } else {
-                                  selected.remove(id);
-                                }
-                              });
-                            },
-                            title: Text(
-                              it['name'] ?? '',
-                              style: const TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            subtitle: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                if ((it['article'] ?? '').toString().isNotEmpty)
-                                  Text(
-                                    'Арт.: ${it['article']}',
-                                    style: const TextStyle(
-                                      fontSize: 11,
-                                      color: Colors.grey,
-                                    ),
-                                  ),
-                                Text(
-                                  'На складе: $qty  •  Минимум: $min',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: isOut
-                                        ? Colors.red
-                                        : isLow
-                                        ? Colors.orange.shade800
-                                        : Colors.grey,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            secondary: isSelected
-                                ? SizedBox(
-                                    width: 70,
-                                    child: TextField(
-                                      controller: qtyCtrls[id],
-                                      keyboardType: TextInputType.number,
-                                      textAlign: TextAlign.center,
-                                      decoration: const InputDecoration(
-                                        isDense: true,
-                                        labelText: 'Кол-во',
-                                        labelStyle: TextStyle(fontSize: 10),
-                                      ),
-                                      onChanged: (v) {
-                                        final n = int.tryParse(v.trim());
-                                        if (n != null && n > 0) {
-                                          selected[id] = n;
-                                        }
-                                      },
-                                    ),
-                                  )
-                                : (isOut || isLow)
-                                ? Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 4,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color:
-                                          (isOut ? Colors.red : Colors.orange)
-                                              .withOpacity(0.15),
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    child: Text(
-                                      isOut ? 'Нет' : 'Мало',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.bold,
-                                        color: isOut
-                                            ? Colors.red
-                                            : Colors.orange.shade800,
-                                      ),
-                                    ),
-                                  )
-                                : null,
-                          );
-                        },
-                      ),
-                    ),
-
-                    // Кнопка «Сформировать»
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.surface,
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.05),
-                            blurRadius: 4,
-                            offset: const Offset(0, -2),
-                          ),
-                        ],
-                      ),
-                      child: SafeArea(
-                        top: false,
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                'Выбрано: ${selected.length}',
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ),
-                            ElevatedButton.icon(
-                              onPressed: selected.isEmpty
-                                  ? null
-                                  : () async {
-                                      // Собираем список для PDF
-                                      final orderItems =
-                                          <Map<String, dynamic>>[];
-                                      for (final it in sorted) {
-                                        final id = it['id'].toString();
-                                        if (!selected.containsKey(id)) {
-                                          continue;
-                                        }
-                                        orderItems.add({
-                                          'name': it['name'],
-                                          'article': it['article'],
-                                          'orderQuantity': selected[id],
-                                          'unit': it['unit'] ?? 'шт.',
-                                        });
-                                      }
-
-                                      Navigator.pop(context);
-                                      try {
-                                        final prefs =
-                                            await SharedPreferences.getInstance();
-                                        await PdfService.generatePurchaseRequest(
-                                          items: orderItems,
-                                          company:
-                                              prefs.getString('req_company') ??
-                                              'ООО "Агама-строй"',
-                                          director:
-                                              prefs.getString('req_director') ??
-                                              'Генералову С.И.',
-                                          mechanicGenitive:
-                                              prefs.getString(
-                                                'req_mechanic_genitive',
-                                              ) ??
-                                              'Ефимова И.В.',
-                                          mechanicNominative:
-                                              prefs.getString(
-                                                'req_mechanic_nominative',
-                                              ) ??
-                                              'Ефимов И.В.',
-                                        );
-                                      } catch (e) {
-                                        if (mounted) {
-                                          ScaffoldMessenger.of(context)
-                                              .showSnackBar(
-                                                SnackBar(
-                                                  content: Text(
-                                                    'Ошибка генерации: $e',
-                                                  ),
-                                                ),
-                                              );
-                                        }
-                                      }
-                                    },
-                              icon: const Icon(Icons.picture_as_pdf, size: 18),
-                              label: const Text('Сформировать заявку'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.red.shade700,
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 12,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
 
   // ============ ДИАЛОГ ЗАПЧАСТИ ============
 
@@ -592,7 +272,6 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
         categories.first['id'].toString();
     String? subcategoryId = existing?['subcategoryId']?.toString();
 
-    // Если запчасть без категории, или категории нет — присваиваем первую
     if (_findCategory(categoryId) == null) {
       categoryId = categories.first['id'].toString();
       subcategoryId = null;
@@ -632,7 +311,19 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
                         items: categories.map((c) {
                           return DropdownMenuItem(
                             value: c['id'].toString(),
-                            child: Text(c['name'] ?? ''),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  getCategoryIcon(c['icon']?.toString()),
+                                  size: 18,
+                                  color: getCategoryColor(
+                                    c['color']?.toString(),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(c['name'] ?? ''),
+                              ],
+                            ),
                           );
                         }).toList(),
                         onChanged: (v) {
@@ -795,6 +486,328 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
     }
   }
 
+  // ============ ЗАЯВКА НА ЗАКУПКУ ============
+
+  Future<void> _openPurchaseRequest() async {
+    if (items.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Склад пуст — нечего заказывать')),
+      );
+      return;
+    }
+
+    final sorted = items.toList()
+      ..sort((a, b) {
+        final aLow = _isOut(a) || _isLow(a);
+        final bLow = _isOut(b) || _isLow(b);
+        if (aLow == bLow) {
+          return (a['name'] ?? '').toString().toLowerCase().compareTo(
+            (b['name'] ?? '').toString().toLowerCase(),
+          );
+        }
+        return aLow ? -1 : 1;
+      });
+
+    final Map<String, int> selected = {};
+    final Map<String, TextEditingController> qtyCtrls = {};
+
+    for (final it in sorted) {
+      final id = it['id'].toString();
+      final qty = (it['quantity'] as num?)?.toInt() ?? 0;
+      final min = (it['minQuantity'] as num?)?.toInt() ?? 0;
+      final isOut = qty <= 0;
+      final isLow = !isOut && min > 0 && qty <= min;
+
+      if (isOut || isLow) {
+        final target = min > 0 ? min * 2 : 2;
+        final need = target - qty;
+        selected[id] = need > 0 ? need : 1;
+      }
+      qtyCtrls[id] = TextEditingController(
+        text: selected[id]?.toString() ?? '1',
+      );
+    }
+
+    if (!mounted) return;
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+              ),
+              child: SizedBox(
+                height: MediaQuery.of(context).size.height * 0.85,
+                child: Column(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.description_outlined,
+                            color: Colors.red,
+                          ),
+                          const SizedBox(width: 8),
+                          const Text(
+                            'Заявка на закупку',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const Spacer(),
+                          IconButton(
+                            icon: const Icon(Icons.close),
+                            onPressed: () => Navigator.pop(context),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.info_outline,
+                            size: 16,
+                            color: Colors.grey.shade600,
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              'Отметь позиции для заказа. Дефицитные отмечены автоматически.',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.grey.shade700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: sorted.length,
+                        itemBuilder: (context, i) {
+                          final it = sorted[i];
+                          final id = it['id'].toString();
+                          final isSelected = selected.containsKey(id);
+                          final qty = (it['quantity'] as num?)?.toInt() ?? 0;
+                          final min = (it['minQuantity'] as num?)?.toInt() ?? 0;
+                          final isOut = qty <= 0;
+                          final isLow = !isOut && min > 0 && qty <= min;
+
+                          return CheckboxListTile(
+                            value: isSelected,
+                            onChanged: (v) {
+                              setSheetState(() {
+                                if (v == true) {
+                                  final target = min > 0 ? min * 2 : 2;
+                                  final need = target - qty;
+                                  selected[id] = need > 0 ? need : 1;
+                                  qtyCtrls[id]?.text = selected[id].toString();
+                                } else {
+                                  selected.remove(id);
+                                }
+                              });
+                            },
+                            title: Text(
+                              it['name'] ?? '',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                if ((it['article'] ?? '').toString().isNotEmpty)
+                                  Text(
+                                    'Арт.: ${it['article']}',
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                                Text(
+                                  'На складе: $qty  •  Минимум: $min',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: isOut
+                                        ? Colors.red
+                                        : isLow
+                                        ? Colors.orange.shade800
+                                        : Colors.grey,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            secondary: isSelected
+                                ? SizedBox(
+                                    width: 70,
+                                    child: TextField(
+                                      controller: qtyCtrls[id],
+                                      keyboardType: TextInputType.number,
+                                      textAlign: TextAlign.center,
+                                      decoration: const InputDecoration(
+                                        isDense: true,
+                                        labelText: 'Кол-во',
+                                        labelStyle: TextStyle(fontSize: 10),
+                                      ),
+                                      onChanged: (v) {
+                                        final n = int.tryParse(v.trim());
+                                        if (n != null && n > 0) {
+                                          selected[id] = n;
+                                        }
+                                      },
+                                    ),
+                                  )
+                                : (isOut || isLow)
+                                ? Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 4,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color:
+                                          (isOut ? Colors.red : Colors.orange)
+                                              .withOpacity(0.15),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      isOut ? 'Нет' : 'Мало',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.bold,
+                                        color: isOut
+                                            ? Colors.red
+                                            : Colors.orange.shade800,
+                                      ),
+                                    ),
+                                  )
+                                : null,
+                          );
+                        },
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.surface,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.05),
+                            blurRadius: 4,
+                            offset: const Offset(0, -2),
+                          ),
+                        ],
+                      ),
+                      child: SafeArea(
+                        top: false,
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                'Выбрано: ${selected.length}',
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                            ElevatedButton.icon(
+                              onPressed: selected.isEmpty
+                                  ? null
+                                  : () async {
+                                      final orderItems =
+                                          <Map<String, dynamic>>[];
+                                      for (final it in sorted) {
+                                        final id = it['id'].toString();
+                                        if (!selected.containsKey(id)) {
+                                          continue;
+                                        }
+                                        orderItems.add({
+                                          'name': it['name'],
+                                          'article': it['article'],
+                                          'orderQuantity': selected[id],
+                                          'unit': it['unit'] ?? 'шт.',
+                                        });
+                                      }
+
+                                      Navigator.pop(context);
+
+                                      try {
+                                        final prefs =
+                                            await SharedPreferences.getInstance();
+                                        await PdfService.generatePurchaseRequest(
+                                          items: orderItems,
+                                          company:
+                                              prefs.getString('req_company') ??
+                                              'ООО "Агама-строй"',
+                                          director:
+                                              prefs.getString('req_director') ??
+                                              'Генералову С.И.',
+                                          mechanicGenitive:
+                                              prefs.getString(
+                                                'req_mechanic_genitive',
+                                              ) ??
+                                              'Ефимова И.В.',
+                                          mechanicNominative:
+                                              prefs.getString(
+                                                'req_mechanic_nominative',
+                                              ) ??
+                                              'Ефимов И.В.',
+                                        );
+                                      } catch (e) {
+                                        if (mounted) {
+                                          ScaffoldMessenger.of(context)
+                                              .showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    'Ошибка генерации: $e',
+                                                  ),
+                                                ),
+                                              );
+                                        }
+                                      }
+                                    },
+                              icon: const Icon(Icons.picture_as_pdf, size: 18),
+                              label: const Text('Сформировать заявку'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.red.shade700,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 12,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (isLoading) {
@@ -836,7 +849,6 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
               ),
             ),
 
-          // Поиск + кнопка категорий
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
             child: Row(
@@ -888,7 +900,7 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
 
           // Категории
           SizedBox(
-            height: 40,
+            height: 42,
             child: ListView(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -906,15 +918,26 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
                   final count = items
                       .where((i) => i['categoryId'] == c['id'])
                       .length;
+                  final color = getCategoryColor(c['color']?.toString());
+                  final icon = getCategoryIcon(c['icon']?.toString());
+                  final isSel = categoryFilter == c['id'];
                   return Padding(
                     padding: const EdgeInsets.only(right: 8),
-                    child: ChoiceChip(
+                    child: FilterChip(
+                      avatar: Icon(
+                        icon,
+                        size: 18,
+                        color: isSel ? Colors.white : color,
+                      ),
                       label: Text('${c['name']} ($count)'),
-                      selected: categoryFilter == c['id'],
+                      selected: isSel,
                       onSelected: (_) => setState(() {
                         categoryFilter = c['id'].toString();
                         subcategoryFilter = null;
                       }),
+                      selectedColor: color,
+                      labelStyle: TextStyle(color: isSel ? Colors.white : null),
+                      checkmarkColor: Colors.white,
                     ),
                   );
                 }),
@@ -922,7 +945,7 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
             ),
           ),
 
-          // Подкатегории (если выбрана категория)
+          // Подкатегории
           if (categoryFilter != null && currentSubs.isNotEmpty) ...[
             const SizedBox(height: 6),
             SizedBox(
@@ -949,16 +972,25 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
                               i['subcategoryId'] == subId,
                         )
                         .length;
+                    final isSel = subcategoryFilter == subId;
+                    final color = getCategoryColor(
+                      currentCat?['color']?.toString(),
+                    );
                     return Padding(
                       padding: const EdgeInsets.only(right: 8),
-                      child: ChoiceChip(
+                      child: FilterChip(
                         label: Text(
                           '${s['name']} ($count)',
                           style: const TextStyle(fontSize: 11),
                         ),
-                        selected: subcategoryFilter == subId,
+                        selected: isSel,
                         onSelected: (_) =>
                             setState(() => subcategoryFilter = subId),
+                        selectedColor: color,
+                        labelStyle: TextStyle(
+                          color: isSel ? Colors.white : null,
+                        ),
+                        checkmarkColor: Colors.white,
                       ),
                     );
                   }),
@@ -1138,21 +1170,34 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
                                         if (cat != null)
                                           Padding(
                                             padding: const EdgeInsets.only(
-                                              top: 2,
+                                              top: 3,
                                             ),
                                             child: Row(
                                               children: [
-                                                const Icon(
-                                                  Icons.folder_outlined,
-                                                  size: 11,
-                                                  color: Colors.blueGrey,
+                                                Icon(
+                                                  getCategoryIcon(
+                                                    cat['icon']?.toString(),
+                                                  ),
+                                                  size: 13,
+                                                  color: getCategoryColor(
+                                                    cat['color']?.toString(),
+                                                  ),
                                                 ),
-                                                const SizedBox(width: 3),
-                                                Text(
-                                                  '${cat['name']}${sub != null ? ' → ${sub['name']}' : ''}',
-                                                  style: const TextStyle(
-                                                    fontSize: 11,
-                                                    color: Colors.blueGrey,
+                                                const SizedBox(width: 4),
+                                                Flexible(
+                                                  child: Text(
+                                                    '${cat['name']}${sub != null ? ' → ${sub['name']}' : ''}',
+                                                    style: TextStyle(
+                                                      fontSize: 11,
+                                                      color: getCategoryColor(
+                                                        cat['color']
+                                                            ?.toString(),
+                                                      ),
+                                                      fontWeight:
+                                                          FontWeight.w500,
+                                                    ),
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
                                                   ),
                                                 ),
                                               ],
