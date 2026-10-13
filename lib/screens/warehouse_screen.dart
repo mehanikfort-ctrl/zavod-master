@@ -1,3 +1,5 @@
+import '../pdf_service.dart';
+
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -220,6 +222,321 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
       });
     }
     return list;
+  }
+  // ============ ЗАЯВКА НА ЗАКУПКУ ============
+
+  Future<void> _openPurchaseRequest() async {
+    if (items.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Склад пуст — нечего заказывать')),
+      );
+      return;
+    }
+
+    // Порядок: сначала дефицитные, потом остальные
+    final sorted = items.toList()
+      ..sort((a, b) {
+        final aLow = _isOut(a) || _isLow(a);
+        final bLow = _isOut(b) || _isLow(b);
+        if (aLow == bLow) {
+          return (a['name'] ?? '').toString().toLowerCase().compareTo(
+            (b['name'] ?? '').toString().toLowerCase(),
+          );
+        }
+        return aLow ? -1 : 1;
+      });
+
+    // Храним выбранные: id → orderQuantity
+    final Map<String, int> selected = {};
+    final Map<String, TextEditingController> qtyCtrls = {};
+
+    for (final it in sorted) {
+      final id = it['id'].toString();
+      final qty = (it['quantity'] as num?)?.toInt() ?? 0;
+      final min = (it['minQuantity'] as num?)?.toInt() ?? 0;
+      final isOut = qty <= 0;
+      final isLow = !isOut && min > 0 && qty <= min;
+
+      // По умолчанию: дефицитные отмечаем
+      // По умолчанию: дефицитные отмечаем
+      // Целевой остаток = 2 × минимум. Заказ = (2 × минимум) − текущий остаток.
+      if (isOut || isLow) {
+        final target = min > 0 ? min * 2 : 2;
+        final need = target - qty;
+        selected[id] = need > 0 ? need : 1;
+      }
+      qtyCtrls[id] = TextEditingController(
+        text: selected[id]?.toString() ?? '1',
+      );
+    }
+
+    if (!mounted) return;
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+              ),
+              child: SizedBox(
+                height: MediaQuery.of(context).size.height * 0.85,
+                child: Column(
+                  children: [
+                    // Шапка
+                    Container(
+                      padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.description_outlined,
+                            color: Colors.red,
+                          ),
+                          const SizedBox(width: 8),
+                          const Text(
+                            'Заявка на закупку',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const Spacer(),
+                          IconButton(
+                            icon: const Icon(Icons.close),
+                            onPressed: () => Navigator.pop(context),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Divider(height: 1),
+
+                    // Подсказка
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.info_outline,
+                            size: 16,
+                            color: Colors.grey.shade600,
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              'Отметь позиции для заказа. Дефицитные отмечены автоматически.',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.grey.shade700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    // Список
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: sorted.length,
+                        itemBuilder: (context, i) {
+                          final it = sorted[i];
+                          final id = it['id'].toString();
+                          final isSelected = selected.containsKey(id);
+                          final qty = (it['quantity'] as num?)?.toInt() ?? 0;
+                          final min = (it['minQuantity'] as num?)?.toInt() ?? 0;
+                          final isOut = qty <= 0;
+                          final isLow = !isOut && min > 0 && qty <= min;
+
+                          return CheckboxListTile(
+                            value: isSelected,
+                            onChanged: (v) {
+                              setSheetState(() {
+                                if (v == true) {
+                                  final target = min > 0 ? min * 2 : 2;
+                                  final need = target - qty;
+                                  selected[id] = need > 0 ? need : 1;
+                                  qtyCtrls[id]?.text = selected[id].toString();
+                                } else {
+                                  selected.remove(id);
+                                }
+                              });
+                            },
+                            title: Text(
+                              it['name'] ?? '',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                if ((it['article'] ?? '').toString().isNotEmpty)
+                                  Text(
+                                    'Арт.: ${it['article']}',
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                                Text(
+                                  'На складе: $qty  •  Минимум: $min',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: isOut
+                                        ? Colors.red
+                                        : isLow
+                                        ? Colors.orange.shade800
+                                        : Colors.grey,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            secondary: isSelected
+                                ? SizedBox(
+                                    width: 70,
+                                    child: TextField(
+                                      controller: qtyCtrls[id],
+                                      keyboardType: TextInputType.number,
+                                      textAlign: TextAlign.center,
+                                      decoration: const InputDecoration(
+                                        isDense: true,
+                                        labelText: 'Кол-во',
+                                        labelStyle: TextStyle(fontSize: 10),
+                                      ),
+                                      onChanged: (v) {
+                                        final n = int.tryParse(v.trim());
+                                        if (n != null && n > 0) {
+                                          selected[id] = n;
+                                        }
+                                      },
+                                    ),
+                                  )
+                                : (isOut || isLow)
+                                ? Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 4,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color:
+                                          (isOut ? Colors.red : Colors.orange)
+                                              .withOpacity(0.15),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      isOut ? 'Нет' : 'Мало',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.bold,
+                                        color: isOut
+                                            ? Colors.red
+                                            : Colors.orange.shade800,
+                                      ),
+                                    ),
+                                  )
+                                : null,
+                          );
+                        },
+                      ),
+                    ),
+
+                    // Кнопка «Сформировать»
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.surface,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.05),
+                            blurRadius: 4,
+                            offset: const Offset(0, -2),
+                          ),
+                        ],
+                      ),
+                      child: SafeArea(
+                        top: false,
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                'Выбрано: ${selected.length}',
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                            ElevatedButton.icon(
+                              onPressed: selected.isEmpty
+                                  ? null
+                                  : () async {
+                                      // Собираем список для PDF
+                                      final orderItems =
+                                          <Map<String, dynamic>>[];
+                                      for (final it in sorted) {
+                                        final id = it['id'].toString();
+                                        if (!selected.containsKey(id)) {
+                                          continue;
+                                        }
+                                        orderItems.add({
+                                          'name': it['name'],
+                                          'article': it['article'],
+                                          'orderQuantity': selected[id],
+                                          'unit': it['unit'] ?? 'шт.',
+                                        });
+                                      }
+
+                                      Navigator.pop(context);
+                                      try {
+                                        await PdfService.generatePurchaseRequest(
+                                          items: orderItems,
+                                        );
+                                      } catch (e) {
+                                        if (mounted) {
+                                          ScaffoldMessenger.of(context)
+                                              .showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    'Ошибка генерации: $e',
+                                                  ),
+                                                ),
+                                              );
+                                        }
+                                      }
+                                    },
+                              icon: const Icon(Icons.picture_as_pdf, size: 18),
+                              label: const Text('Сформировать заявку'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.red.shade700,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 12,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   // ============ ДИАЛОГ ЗАПЧАСТИ ============
@@ -518,6 +835,16 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
                     ),
                     onChanged: (v) => setState(() => searchQuery = v),
                   ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  tooltip: 'Заявка на закупку',
+                  style: IconButton.styleFrom(
+                    backgroundColor: Colors.red.shade700,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: _openPurchaseRequest,
+                  icon: const Icon(Icons.description_outlined),
                 ),
                 const SizedBox(width: 8),
                 IconButton.filled(

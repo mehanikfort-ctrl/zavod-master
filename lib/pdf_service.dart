@@ -507,8 +507,188 @@ class PdfService {
   }
 
   // ============================================================
-  //  ВСПОМОГАТЕЛЬНЫЕ ВИДЖЕТЫ
+  //  ЗАЯВКА НА ЗАКУПКУ
   // ============================================================
+  // ============================================================
+  //  ЗАЯВКА НА ЗАКУПКУ
+  // ============================================================
+  // ============================================================
+  //  ЗАЯВКА НА ЗАКУПКУ
+  // ============================================================
+  static Future<void> generatePurchaseRequest({
+    required List<Map<String, dynamic>> items,
+    String director = 'Генералову С.И.',
+    String company = 'ООО "Агама-строй"',
+    String mechanicGenitive = 'Ефимова И.В.', // для шапки: "от механика ..."
+    String mechanicNominative = 'Ефимов И.В.', // для подписи
+  }) async {
+    // Загружаем Times New Roman
+    final regularData = await File('assets/fonts/TimesNewRoman.ttf')
+        .readAsBytes();
+    final boldData = await File('assets/fonts/TimesNewRoman-Bold.ttf')
+        .readAsBytes();
+    final regular = pw.Font.ttf(regularData.buffer.asByteData());
+    final bold = pw.Font.ttf(boldData.buffer.asByteData());
+
+    final dateFmt = DateFormat('dd.MM.yyyy');
+
+    final sorted = items.toList()
+      ..sort((a, b) {
+        return (a['name'] ?? '').toString().toLowerCase().compareTo(
+          (b['name'] ?? '').toString().toLowerCase(),
+        );
+      });
+
+    final doc = pw.Document();
+
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        theme: pw.ThemeData.withFont(base: regular, bold: bold),
+        margin: const pw.EdgeInsets.fromLTRB(50, 40, 50, 40),
+        build: (context) => [
+          // ===== Шапка справа =====
+          pw.Align(
+            alignment: pw.Alignment.centerRight,
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Text('Директору', style: const pw.TextStyle(fontSize: 14)),
+                pw.Text(company, style: const pw.TextStyle(fontSize: 14)),
+                pw.Text(director, style: const pw.TextStyle(fontSize: 14)),
+                pw.Text('от механика', style: const pw.TextStyle(fontSize: 14)),
+                pw.Text(
+                  mechanicGenitive,
+                  style: const pw.TextStyle(fontSize: 14),
+                ),
+              ],
+            ),
+          ),
+
+          pw.SizedBox(height: 40),
+
+          // ===== Заголовок «Заявка» по центру =====
+          pw.Center(
+            child: pw.Text(
+              'Заявка',
+              style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
+            ),
+          ),
+
+          pw.SizedBox(height: 30),
+
+          // ===== Текст с отступом =====
+          pw.Padding(
+            padding: const pw.EdgeInsets.only(left: 30),
+            child: pw.Text(
+              'Для проведения ТО и срочного ремонта необходимо приобрести:',
+              style: const pw.TextStyle(fontSize: 14),
+            ),
+          ),
+
+          pw.SizedBox(height: 20),
+
+          // ===== Нумерованный список =====
+          if (sorted.isEmpty)
+            pw.Text(
+              '— позиции не выбраны —',
+              style: const pw.TextStyle(fontSize: 14, color: PdfColors.grey600),
+            )
+          else
+            ...sorted.asMap().entries.map((entry) {
+              final i = entry.key;
+              final it = entry.value;
+              final name = it['name']?.toString() ?? '';
+              final article = it['article']?.toString() ?? '';
+              final qty = it['orderQuantity'] ?? 1;
+              final unit = it['unit']?.toString() ?? 'шт.';
+
+              return pw.Padding(
+                padding: const pw.EdgeInsets.only(bottom: 10, left: 30),
+                child: pw.Row(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.SizedBox(
+                      width: 28,
+                      child: pw.Text(
+                        '${i + 1}.',
+                        style: const pw.TextStyle(fontSize: 14),
+                      ),
+                    ),
+                    pw.Expanded(
+                      child: pw.RichText(
+                        text: pw.TextSpan(
+                          style: const pw.TextStyle(fontSize: 14),
+                          children: [
+                            pw.TextSpan(
+                              text: name,
+                              style: pw.TextStyle(
+                                fontWeight: pw.FontWeight.bold,
+                              ),
+                            ),
+                            if (article.isNotEmpty)
+                              pw.TextSpan(
+                                text: '  (арт. $article)',
+                                style: const pw.TextStyle(
+                                  fontSize: 14,
+                                  color: PdfColors.grey700,
+                                ),
+                              ),
+                            pw.TextSpan(
+                              text: '  —  $qty $unit',
+                              style: pw.TextStyle(
+                                fontWeight: pw.FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
+
+          pw.SizedBox(height: 60),
+
+          // ===== Дата и подпись =====
+          pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.end,
+            children: [
+              pw.Text(
+                'Дата: ${dateFmt.format(DateTime.now())}',
+                style: const pw.TextStyle(fontSize: 14),
+              ),
+              pw.Spacer(),
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text(
+                    'Механик  _______________',
+                    style: const pw.TextStyle(fontSize: 14),
+                  ),
+                  pw.SizedBox(height: 6),
+                  pw.Text(
+                    '                 / $mechanicNominative /',
+                    style: const pw.TextStyle(
+                      fontSize: 14,
+                      color: PdfColors.grey700,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    await Printing.layoutPdf(
+      onLayout: (format) async => doc.save(),
+      name: 'Заявка на закупку — ${dateFmt.format(DateTime.now())}.pdf',
+    );
+  }
+
   static pw.Widget _cell(String text, {bool bold = false}) {
     return pw.Text(
       text,
