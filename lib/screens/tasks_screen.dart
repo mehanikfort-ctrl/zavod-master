@@ -19,14 +19,14 @@ class _TasksScreenState extends State<TasksScreen> {
   bool isLoading = true;
   static const String _storageKey = 'tasks';
   static const String _equipmentKey = 'equipment';
+  static const String _warehouseKey = 'warehouse';
 
   String searchQuery = '';
   String? priorityFilter;
   String? categoryFilter;
   String? equipmentFilter;
 
-  // 0 = Активные, 1 = Готово, 2 = Архив
-  int _viewMode = 0;
+  int _viewMode = 0; // 0=Активные, 1=Готово, 2=Архив
 
   final List<String> categories = [
     '💧 Вода',
@@ -58,6 +58,7 @@ class _TasksScreenState extends State<TasksScreen> {
         t.putIfAbsent('archived', () => false);
         t.putIfAbsent('comments', () => <Map<String, dynamic>>[]);
         t.putIfAbsent('photos', () => <String>[]);
+        t.putIfAbsent('materials', () => <Map<String, dynamic>>[]);
       }
     } else {
       tasks = [
@@ -71,6 +72,7 @@ class _TasksScreenState extends State<TasksScreen> {
           'archived': false,
           'comments': <Map<String, dynamic>>[],
           'photos': <String>[],
+          'materials': <Map<String, dynamic>>[],
         },
       ];
       await _saveTasks();
@@ -88,6 +90,54 @@ class _TasksScreenState extends State<TasksScreen> {
   Future<void> _saveTasks() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_storageKey, jsonEncode(tasks));
+  }
+
+  // ============ СКЛАД: списание / возврат ============
+
+  /// Применяет разницу между oldMaterials и newMaterials к складу.
+  /// Разница положительная → списываем, отрицательная → возвращаем.
+  Future<void> _applyMaterialsDiff({
+    required List<Map<String, dynamic>> oldMaterials,
+    required List<Map<String, dynamic>> newMaterials,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_warehouseKey);
+    if (raw == null || raw.isEmpty) return;
+
+    final warehouse = (jsonDecode(raw) as List)
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+
+    final oldMap = <String, int>{};
+    for (final m in oldMaterials) {
+      oldMap[m['id'].toString()] = (m['quantity'] as num).toInt();
+    }
+    final newMap = <String, int>{};
+    for (final m in newMaterials) {
+      newMap[m['id'].toString()] = (m['quantity'] as num).toInt();
+    }
+
+    final allIds = {...oldMap.keys, ...newMap.keys};
+    for (final id in allIds) {
+      final diff = (newMap[id] ?? 0) - (oldMap[id] ?? 0);
+      if (diff == 0) continue;
+
+      final idx = warehouse.indexWhere((w) => w['id'].toString() == id);
+      if (idx < 0) continue;
+      final current = (warehouse[idx]['quantity'] as num?)?.toInt() ?? 0;
+      warehouse[idx]['quantity'] = (current - diff).clamp(0, 999999);
+      warehouse[idx]['updatedAt'] = DateTime.now().toIso8601String();
+    }
+
+    await prefs.setString(_warehouseKey, jsonEncode(warehouse));
+  }
+
+  /// Возвращает все материалы задачи на склад (при удалении).
+  Future<void> _returnMaterialsToWarehouse(
+    List<Map<String, dynamic>> materials,
+  ) async {
+    if (materials.isEmpty) return;
+    await _applyMaterialsDiff(oldMaterials: materials, newMaterials: []);
   }
 
   String? _equipmentName(String? id) {
@@ -183,13 +233,10 @@ class _TasksScreenState extends State<TasksScreen> {
       final completed = t['completed'] == true;
 
       if (_viewMode == 2) {
-        // Архив: только archived
         if (!archived) return false;
       } else if (_viewMode == 1) {
-        // Готово: completed и НЕ archived
         if (!completed || archived) return false;
       } else {
-        // Активные: НЕ completed и НЕ archived
         if (completed || archived) return false;
       }
 
@@ -357,6 +404,225 @@ class _TasksScreenState extends State<TasksScreen> {
     );
   }
 
+  // ============ ВЫБОР ЗАПЧАСТИ СО СКЛАДА ============
+
+  Future<Map<String, dynamic>?> _pickWarehouseItem(
+    List<Map<String, dynamic>> currentMaterials,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_warehouseKey);
+    if (raw == null || raw.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Склад пуст — добавь запчасти на вкладке «Склад»'),
+          ),
+        );
+      }
+      return null;
+    }
+
+    final warehouse = (jsonDecode(raw) as List)
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+
+    if (warehouse.isEmpty) return null;
+
+    String search = '';
+
+    return showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            final filtered = warehouse.where((w) {
+              if (search.isEmpty) return true;
+              final q = search.toLowerCase();
+              return (w['name'] ?? '').toString().toLowerCase().contains(q) ||
+                  (w['article'] ?? '').toString().toLowerCase().contains(q);
+            }).toList();
+
+            return Container(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.inventory_2, color: Color(0xFF1B5E20)),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'Выбрать со склада',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(context),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: TextField(
+                      decoration: InputDecoration(
+                        hintText: 'Поиск по названию или артикулу',
+                        prefixIcon: const Icon(Icons.search),
+                        isDense: true,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      onChanged: (v) => setSheetState(() => search = v),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Flexible(
+                    child: filtered.isEmpty
+                        ? const Padding(
+                            padding: EdgeInsets.all(32),
+                            child: Text(
+                              'Ничего не найдено',
+                              style: TextStyle(color: Colors.grey),
+                            ),
+                          )
+                        : ListView.builder(
+                            shrinkWrap: true,
+                            itemCount: filtered.length,
+                            itemBuilder: (context, i) {
+                              final w = filtered[i];
+                              final qty = (w['quantity'] as num?)?.toInt() ?? 0;
+                              final already = currentMaterials.firstWhere(
+                                (m) => m['id'] == w['id'],
+                                orElse: () => <String, dynamic>{},
+                              );
+                              final alreadyQty =
+                                  (already['quantity'] as num?)?.toInt() ?? 0;
+                              final available = qty - alreadyQty;
+
+                              return ListTile(
+                                enabled: available > 0,
+                                leading: CircleAvatar(
+                                  backgroundColor: qty > 0
+                                      ? const Color(0xFF1B5E20)
+                                            .withOpacity(0.15)
+                                      : Colors.red.withOpacity(0.15),
+                                  child: Icon(
+                                    Icons.settings,
+                                    color: qty > 0
+                                        ? const Color(0xFF1B5E20)
+                                        : Colors.red,
+                                    size: 20,
+                                  ),
+                                ),
+                                title: Text(w['name'] ?? ''),
+                                subtitle: Text(
+                                  '${(w['article'] ?? '').toString().isEmpty ? '—' : w['article']}  •  Остаток: $available',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: available > 0
+                                        ? Colors.grey
+                                        : Colors.red,
+                                  ),
+                                ),
+                                trailing: available > 0
+                                    ? const Icon(Icons.add_circle_outline)
+                                    : const Text(
+                                        'нет',
+                                        style: TextStyle(color: Colors.red),
+                                      ),
+                                onTap: available > 0
+                                    ? () => Navigator.pop(context, w)
+                                    : null,
+                              );
+                            },
+                          ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<int?> _askQuantity({
+    required String name,
+    required String unit,
+    required int maxAvailable,
+    int initial = 1,
+  }) async {
+    final ctrl = TextEditingController(text: initial.toString());
+    final result = await showDialog<int>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text(name, maxLines: 2),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Доступно: $maxAvailable $unit',
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: ctrl,
+                decoration: const InputDecoration(labelText: 'Количество'),
+                keyboardType: TextInputType.number,
+                autofocus: true,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Отмена'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1B5E20),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () {
+                final v = int.tryParse(ctrl.text.trim());
+                if (v == null || v <= 0) return;
+                if (v > maxAvailable) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('На складе только $maxAvailable $unit'),
+                    ),
+                  );
+                  return;
+                }
+                Navigator.pop(context, v);
+              },
+              child: const Text('OK'),
+            ),
+          ],
+        );
+      },
+    );
+    return result;
+  }
+
+  // ============ ДИАЛОГ ЗАДАЧИ ============
+
   Future<void> _showTaskDialog({int? editIndex}) async {
     final bool isEdit = editIndex != null;
     final existing = isEdit ? tasks[editIndex] : null;
@@ -381,6 +647,12 @@ class _TasksScreenState extends State<TasksScreen> {
     List<String> photos = isEdit
         ? ((existing?['photos'] as List?) ?? [])
               .map((e) => e.toString())
+              .toList()
+        : [];
+
+    List<Map<String, dynamic>> materials = isEdit
+        ? ((existing?['materials'] as List?) ?? [])
+              .map((e) => Map<String, dynamic>.from(e))
               .toList()
         : [];
 
@@ -464,6 +736,46 @@ class _TasksScreenState extends State<TasksScreen> {
               setStateDialog(() => photos.removeAt(index));
               newlyAddedPhotos.remove(path);
               await _deletePhotoFile(path);
+            }
+
+            Future<void> addMaterial() async {
+              final picked = await _pickWarehouseItem(materials);
+              if (picked == null) return;
+
+              final qty = (picked['quantity'] as num?)?.toInt() ?? 0;
+              final already = materials.firstWhere(
+                (m) => m['id'] == picked['id'],
+                orElse: () => <String, dynamic>{},
+              );
+              final alreadyQty = (already['quantity'] as num?)?.toInt() ?? 0;
+              final available = qty - alreadyQty;
+              if (available <= 0) return;
+
+              final unit = picked['unit']?.toString() ?? 'шт';
+              final q = await _askQuantity(
+                name: picked['name']?.toString() ?? '',
+                unit: unit,
+                maxAvailable: available,
+                initial: alreadyQty > 0 ? alreadyQty : 1,
+              );
+              if (q == null) return;
+
+              setStateDialog(() {
+                final idx = materials.indexWhere(
+                  (m) => m['id'] == picked['id'],
+                );
+                if (idx >= 0) {
+                  materials[idx]['quantity'] = q;
+                } else {
+                  materials.add({
+                    'id': picked['id'],
+                    'name': picked['name'],
+                    'article': picked['article'],
+                    'unit': unit,
+                    'quantity': q,
+                  });
+                }
+              });
             }
 
             final isArchived = isEdit && existing?['archived'] == true;
@@ -585,7 +897,6 @@ class _TasksScreenState extends State<TasksScreen> {
                         ],
                       ),
 
-                      // Кнопка "В архив" / "Вернуть из архива"
                       if (isEdit) ...[
                         const SizedBox(height: 12),
                         SizedBox(
@@ -615,7 +926,116 @@ class _TasksScreenState extends State<TasksScreen> {
                         ),
                       ],
 
-                      // ====== ФОТО ======
+                      // ===== МАТЕРИАЛЫ СО СКЛАДА =====
+                      const Divider(height: 32),
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.inventory_2,
+                            size: 20,
+                            color: Color(0xFF1B5E20),
+                          ),
+                          const SizedBox(width: 6),
+                          const Text(
+                            'Запчасти со склада',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          if (materials.isNotEmpty)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF1B5E20),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Text(
+                                '${materials.length}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ),
+                          const Spacer(),
+                          TextButton.icon(
+                            onPressed: addMaterial,
+                            icon: const Icon(Icons.add, size: 16),
+                            label: const Text('Добавить'),
+                          ),
+                        ],
+                      ),
+                      if (materials.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 6),
+                          child: Text(
+                            'Запчасти пока не добавлены. Списываются при сохранении.',
+                            style: TextStyle(fontSize: 11, color: Colors.grey),
+                          ),
+                        )
+                      else
+                        ...materials.asMap().entries.map((entry) {
+                          final i = entry.key;
+                          final m = entry.value;
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 6),
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF1B5E20).withOpacity(0.06),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.settings,
+                                  size: 16,
+                                  color: Color(0xFF1B5E20),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        m['name'] ?? '',
+                                        style: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                      Text(
+                                        '${m['quantity']} ${m['unit'] ?? 'шт'}',
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          color: Colors.grey,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.close,
+                                    size: 18,
+                                    color: Colors.red,
+                                  ),
+                                  visualDensity: VisualDensity.compact,
+                                  onPressed: () {
+                                    setStateDialog(() => materials.removeAt(i));
+                                  },
+                                ),
+                              ],
+                            ),
+                          );
+                        }),
+
+                      // ===== ФОТО =====
                       if (isEdit) ...[
                         const Divider(height: 32),
                         Row(
@@ -726,7 +1146,7 @@ class _TasksScreenState extends State<TasksScreen> {
                         ],
                       ],
 
-                      // ====== КОММЕНТАРИИ ======
+                      // ===== КОММЕНТАРИИ =====
                       if (isEdit) ...[
                         const Divider(height: 32),
                         Row(
@@ -908,6 +1328,23 @@ class _TasksScreenState extends State<TasksScreen> {
                       timeLabel = 'Сегодня, ${formatTime(selectedTime!)}';
                     }
 
+                    // Сохраняем материалы и применяем разницу к складу
+                    if (isEdit) {
+                      final oldMaterials =
+                          ((existing?['materials'] as List?) ?? [])
+                              .map((e) => Map<String, dynamic>.from(e))
+                              .toList();
+                      await _applyMaterialsDiff(
+                        oldMaterials: oldMaterials,
+                        newMaterials: materials,
+                      );
+                    } else {
+                      await _applyMaterialsDiff(
+                        oldMaterials: [],
+                        newMaterials: materials,
+                      );
+                    }
+
                     setState(() {
                       if (isEdit) {
                         tasks[editIndex]['title'] = titleController.text.trim();
@@ -917,6 +1354,7 @@ class _TasksScreenState extends State<TasksScreen> {
                         tasks[editIndex]['equipmentId'] = selectedEquipmentId;
                         tasks[editIndex]['comments'] = comments;
                         tasks[editIndex]['photos'] = photos;
+                        tasks[editIndex]['materials'] = materials;
                       } else {
                         tasks.add({
                           'title': titleController.text.trim(),
@@ -928,6 +1366,7 @@ class _TasksScreenState extends State<TasksScreen> {
                           'archived': false,
                           'comments': <Map<String, dynamic>>[],
                           'photos': <String>[],
+                          'materials': materials,
                         });
                       }
                     });
@@ -971,6 +1410,36 @@ class _TasksScreenState extends State<TasksScreen> {
     if (realIndex < 0) return;
 
     final task = tasks[realIndex];
+
+    // Возвращаем материалы на склад
+    final mats = ((task['materials'] as List?) ?? [])
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    if (mats.isNotEmpty) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Удалить задачу?'),
+          content: Text(
+            'Задача «${task['title']}» будет удалена, а ${mats.length} запчастей вернутся на склад.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Отмена'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Удалить'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+      await _returnMaterialsToWarehouse(mats);
+    }
+
     final photosList = (task['photos'] as List?) ?? [];
     for (final p in photosList) {
       await _deletePhotoFile(p.toString());
@@ -1022,7 +1491,6 @@ class _TasksScreenState extends State<TasksScreen> {
     return Scaffold(
       body: Column(
         children: [
-          // Переключатель: Активные / Готово / Архив
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
             child: Row(
@@ -1057,8 +1525,8 @@ class _TasksScreenState extends State<TasksScreen> {
                         setState(() => _viewMode = s.first),
                     style: ButtonStyle(
                       visualDensity: VisualDensity.compact,
-                      padding: WidgetStatePropertyAll(
-                        const EdgeInsets.symmetric(horizontal: 4),
+                      padding: const WidgetStatePropertyAll(
+                        EdgeInsets.symmetric(horizontal: 4),
                       ),
                     ),
                   ),
@@ -1067,7 +1535,6 @@ class _TasksScreenState extends State<TasksScreen> {
             ),
           ),
 
-          // Поиск + фильтры
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
             child: Row(
@@ -1122,7 +1589,6 @@ class _TasksScreenState extends State<TasksScreen> {
             ),
           ),
 
-          // Чипы приоритетов
           SizedBox(
             height: 40,
             child: ListView(
@@ -1161,7 +1627,7 @@ class _TasksScreenState extends State<TasksScreen> {
                 ? Center(
                     child: Text(
                       _viewMode == 2
-                          ? 'Архив пуст.\nСюда попадают выполненные задачи старше 30 дней.'
+                          ? 'Архив пуст.'
                           : _viewMode == 1
                           ? 'Выполненных задач пока нет.'
                           : 'Активных задач нет.\nНажми «+», чтобы добавить.',
@@ -1181,6 +1647,8 @@ class _TasksScreenState extends State<TasksScreen> {
                       final commentCount =
                           (task['comments'] as List?)?.length ?? 0;
                       final photoCount = (task['photos'] as List?)?.length ?? 0;
+                      final materialCount =
+                          (task['materials'] as List?)?.length ?? 0;
 
                       return Dismissible(
                         key: ValueKey(
@@ -1300,6 +1768,22 @@ class _TasksScreenState extends State<TasksScreen> {
                                           overflow: TextOverflow.ellipsis,
                                         ),
                                       ),
+                                      if (materialCount > 0) ...[
+                                        const SizedBox(width: 8),
+                                        const Icon(
+                                          Icons.inventory_2,
+                                          size: 14,
+                                          color: Colors.grey,
+                                        ),
+                                        const SizedBox(width: 2),
+                                        Text(
+                                          '$materialCount',
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.grey,
+                                          ),
+                                        ),
+                                      ],
                                       if (commentCount > 0) ...[
                                         const SizedBox(width: 8),
                                         const Icon(
@@ -1348,10 +1832,10 @@ class _TasksScreenState extends State<TasksScreen> {
                                 }
                               },
                               itemBuilder: (context) => [
-                                PopupMenuItem(
+                                const PopupMenuItem(
                                   value: 'edit',
                                   child: Row(
-                                    children: const [
+                                    children: [
                                       Icon(Icons.edit, size: 18),
                                       SizedBox(width: 8),
                                       Text('Редактировать'),
@@ -1359,10 +1843,10 @@ class _TasksScreenState extends State<TasksScreen> {
                                   ),
                                 ),
                                 if (!isArchived)
-                                  PopupMenuItem(
+                                  const PopupMenuItem(
                                     value: 'archive',
                                     child: Row(
-                                      children: const [
+                                      children: [
                                         Icon(Icons.archive_outlined, size: 18),
                                         SizedBox(width: 8),
                                         Text('В архив'),
@@ -1370,10 +1854,10 @@ class _TasksScreenState extends State<TasksScreen> {
                                     ),
                                   ),
                                 if (isArchived)
-                                  PopupMenuItem(
+                                  const PopupMenuItem(
                                     value: 'unarchive',
                                     child: Row(
-                                      children: const [
+                                      children: [
                                         Icon(
                                           Icons.unarchive_outlined,
                                           size: 18,
