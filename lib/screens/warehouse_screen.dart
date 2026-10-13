@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'warehouse_categories_screen.dart';
+
 class WarehouseScreen extends StatefulWidget {
   const WarehouseScreen({super.key});
 
@@ -12,11 +14,15 @@ class WarehouseScreen extends StatefulWidget {
 
 class _WarehouseScreenState extends State<WarehouseScreen> {
   List<Map<String, dynamic>> items = [];
+  List<Map<String, dynamic>> categories = [];
   bool isLoading = true;
   String searchQuery = '';
-  String sortMode = 'name'; // name | quantity | low
+  String sortMode = 'name';
+  String? categoryFilter; // categoryId
+  String? subcategoryFilter; // subcategoryId
 
-  static const String _storageKey = 'warehouse';
+  static const String _itemsKey = 'warehouse';
+  static const String _categoriesKey = 'warehouse_categories';
 
   @override
   void initState() {
@@ -26,18 +32,143 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_storageKey);
-    if (raw != null && raw.isNotEmpty) {
-      items = (jsonDecode(raw) as List)
+
+    // Категории
+    final rawCats = prefs.getString(_categoriesKey);
+    if (rawCats != null && rawCats.isNotEmpty) {
+      categories = (jsonDecode(rawCats) as List)
           .map((e) => Map<String, dynamic>.from(e))
           .toList();
+      for (final c in categories) {
+        c.putIfAbsent('subcategories', () => <Map<String, dynamic>>[]);
+      }
+    } else {
+      categories = [
+        {
+          'id': 'cat_mech',
+          'name': 'Механика',
+          'subcategories': <Map<String, dynamic>>[],
+        },
+        {
+          'id': 'cat_el',
+          'name': 'Электрика',
+          'subcategories': <Map<String, dynamic>>[],
+        },
+        {
+          'id': 'cat_water',
+          'name': 'Сантехника',
+          'subcategories': <Map<String, dynamic>>[],
+        },
+        {
+          'id': 'cat_gas',
+          'name': 'Газ',
+          'subcategories': <Map<String, dynamic>>[],
+        },
+        {
+          'id': 'cat_cons',
+          'name': 'Расходники',
+          'subcategories': <Map<String, dynamic>>[],
+        },
+        {
+          'id': 'cat_fast',
+          'name': 'Крепёж',
+          'subcategories': <Map<String, dynamic>>[],
+        },
+        {
+          'id': 'cat_other',
+          'name': 'Прочее',
+          'subcategories': <Map<String, dynamic>>[],
+        },
+      ];
+      await prefs.setString(_categoriesKey, jsonEncode(categories));
     }
+
+    // Запчасти + миграция старых
+    final rawItems = prefs.getString(_itemsKey);
+    if (rawItems != null && rawItems.isNotEmpty) {
+      items = (jsonDecode(rawItems) as List)
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+
+      bool migrated = false;
+      for (final item in items) {
+        // Если уже есть categoryId — пропускаем
+        if (item['categoryId'] != null) continue;
+
+        // Старое поле 'category' (строка вида "🔧 Механика") → ищем категорию по имени
+        final oldName = item['category']?.toString();
+        if (oldName != null && oldName.isNotEmpty) {
+          final cleanName = oldName
+              .replaceAll(RegExp(r'[^\wА-Яа-яёЁ]'), '')
+              .trim();
+          final found = categories.firstWhere((c) {
+            final cn = c['name']
+                .toString()
+                .replaceAll(RegExp(r'[^\wА-Яа-яёЁ]'), '')
+                .trim();
+            return cn.toLowerCase() == cleanName.toLowerCase();
+          }, orElse: () => <String, dynamic>{});
+          if (found.isNotEmpty) {
+            item['categoryId'] = found['id'];
+          }
+        }
+
+        // Если всё ещё нет — в «Прочее»
+        if (item['categoryId'] == null) {
+          final other = categories.firstWhere(
+            (c) => c['name'] == 'Прочее' || c['id'] == 'cat_other',
+            orElse: () =>
+                categories.isNotEmpty ? categories.first : <String, dynamic>{},
+          );
+          if (other.isNotEmpty) {
+            item['categoryId'] = other['id'];
+          }
+        }
+        item.remove('category'); // старое поле больше не нужно
+        migrated = true;
+      }
+      if (migrated) await _saveItems();
+    }
+
     setState(() => isLoading = false);
   }
 
-  Future<void> _save() async {
+  Future<void> _saveItems() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_storageKey, jsonEncode(items));
+    await prefs.setString(_itemsKey, jsonEncode(items));
+  }
+
+  Future<void> _reloadCategories() async {
+    final prefs = await SharedPreferences.getInstance();
+    final rawCats = prefs.getString(_categoriesKey);
+    if (rawCats != null && rawCats.isNotEmpty) {
+      setState(() {
+        categories = (jsonDecode(rawCats) as List)
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+        for (final c in categories) {
+          c.putIfAbsent('subcategories', () => <Map<String, dynamic>>[]);
+        }
+      });
+    }
+  }
+
+  Map<String, dynamic>? _findCategory(String? id) {
+    if (id == null) return null;
+    for (final c in categories) {
+      if (c['id'] == id) return c;
+    }
+    return null;
+  }
+
+  Map<String, dynamic>? _findSubcategory(String? catId, String? subId) {
+    if (catId == null || subId == null) return null;
+    final cat = _findCategory(catId);
+    if (cat == null) return null;
+    for (final s in (cat['subcategories'] as List)) {
+      if (s['id'] == subId) return Map<String, dynamic>.from(s);
+    }
+    return null;
   }
 
   bool _isLow(Map<String, dynamic> item) {
@@ -54,6 +185,13 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
 
   List<Map<String, dynamic>> get _filtered {
     var list = items.where((item) {
+      if (categoryFilter != null && item['categoryId'] != categoryFilter) {
+        return false;
+      }
+      if (subcategoryFilter != null &&
+          item['subcategoryId'] != subcategoryFilter) {
+        return false;
+      }
       if (searchQuery.isEmpty) return true;
       final q = searchQuery.toLowerCase();
       return (item['name'] ?? '').toString().toLowerCase().contains(q) ||
@@ -84,7 +222,20 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
     return list;
   }
 
+  // ============ ДИАЛОГ ЗАПЧАСТИ ============
+
   Future<void> _showAddEditDialog({int? editIndex}) async {
+    if (categories.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Сначала добавь категорию (иконка «папки» сверху)'),
+          ),
+        );
+      }
+      return;
+    }
+
     final isEdit = editIndex != null;
     final existing = isEdit ? items[editIndex] : null;
 
@@ -101,116 +252,175 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
     );
     final notesCtrl = TextEditingController(text: existing?['notes'] ?? '');
 
+    String categoryId =
+        existing?['categoryId']?.toString() ??
+        categories.first['id'].toString();
+    String? subcategoryId = existing?['subcategoryId']?.toString();
+
+    // Если запчасть без категории, или категории нет — присваиваем первую
+    if (_findCategory(categoryId) == null) {
+      categoryId = categories.first['id'].toString();
+      subcategoryId = null;
+    }
+
     await showDialog(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          title: Text(isEdit ? 'Редактировать запчасть' : 'Новая запчасть'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: nameCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Название',
-                      hintText: 'Подшипник 6205',
-                    ),
-                    autofocus: !isEdit,
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: articleCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Артикул',
-                      hintText: 'PB-6205',
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final cat = _findCategory(categoryId);
+            final subs = (cat?['subcategories'] as List?) ?? [];
+
+            return AlertDialog(
+              title: Text(isEdit ? 'Редактировать запчасть' : 'Новая запчасть'),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Expanded(
-                        child: TextField(
-                          controller: qtyCtrl,
-                          decoration: const InputDecoration(
-                            labelText: 'Количество',
+                      TextField(
+                        controller: nameCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Название',
+                          hintText: 'Ремень А-1000',
+                        ),
+                        autofocus: !isEdit,
+                      ),
+                      const SizedBox(height: 10),
+                      DropdownButtonFormField<String>(
+                        value: categoryId,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Категория',
+                        ),
+                        items: categories.map((c) {
+                          return DropdownMenuItem(
+                            value: c['id'].toString(),
+                            child: Text(c['name'] ?? ''),
+                          );
+                        }).toList(),
+                        onChanged: (v) {
+                          setDialogState(() {
+                            categoryId = v!;
+                            subcategoryId = null;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 10),
+                      DropdownButtonFormField<String?>(
+                        value: subcategoryId,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Подкатегория',
+                        ),
+                        items: [
+                          const DropdownMenuItem<String?>(
+                            value: null,
+                            child: Text('— Без подкатегории —'),
                           ),
-                          keyboardType: TextInputType.number,
+                          ...subs.map((s) {
+                            return DropdownMenuItem<String?>(
+                              value: s['id'].toString(),
+                              child: Text(s['name'] ?? ''),
+                            );
+                          }),
+                        ],
+                        onChanged: (v) =>
+                            setDialogState(() => subcategoryId = v),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: articleCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Артикул',
+                          hintText: 'PB-6205',
                         ),
                       ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: TextField(
-                          controller: minCtrl,
-                          decoration: const InputDecoration(
-                            labelText: 'Минимум',
-                            hintText: '3',
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: qtyCtrl,
+                              decoration: const InputDecoration(
+                                labelText: 'Количество',
+                              ),
+                              keyboardType: TextInputType.number,
+                            ),
                           ),
-                          keyboardType: TextInputType.number,
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: TextField(
+                              controller: minCtrl,
+                              decoration: const InputDecoration(
+                                labelText: 'Минимум',
+                                hintText: '3',
+                              ),
+                              keyboardType: TextInputType.number,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: locationCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Где хранится',
+                          hintText: 'Склад, стеллаж А',
                         ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: notesCtrl,
+                        decoration: const InputDecoration(labelText: 'Заметки'),
+                        maxLines: 2,
                       ),
                     ],
                   ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: locationCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Где хранится',
-                      hintText: 'Склад, стеллаж А, полка 2',
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: notesCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Заметки',
-                      hintText: 'Используется в насосах ЦНС',
-                    ),
-                    maxLines: 2,
-                  ),
-                ],
+                ),
               ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Отмена'),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF1B5E20),
-                foregroundColor: Colors.white,
-              ),
-              onPressed: () async {
-                if (nameCtrl.text.trim().isEmpty) return;
-                final item = {
-                  'id':
-                      existing?['id'] ??
-                      DateTime.now().millisecondsSinceEpoch.toString(),
-                  'name': nameCtrl.text.trim(),
-                  'article': articleCtrl.text.trim(),
-                  'quantity': int.tryParse(qtyCtrl.text.trim()) ?? 0,
-                  'minQuantity': int.tryParse(minCtrl.text.trim()) ?? 0,
-                  'location': locationCtrl.text.trim(),
-                  'notes': notesCtrl.text.trim(),
-                  'updatedAt': DateTime.now().toIso8601String(),
-                };
-                setState(() {
-                  if (isEdit) {
-                    items[editIndex] = item;
-                  } else {
-                    items.add(item);
-                  }
-                });
-                await _save();
-                if (context.mounted) Navigator.pop(context);
-              },
-              child: Text(isEdit ? 'Сохранить' : 'Добавить'),
-            ),
-          ],
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Отмена'),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1B5E20),
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: () async {
+                    if (nameCtrl.text.trim().isEmpty) return;
+                    final item = {
+                      'id':
+                          existing?['id'] ??
+                          DateTime.now().millisecondsSinceEpoch.toString(),
+                      'name': nameCtrl.text.trim(),
+                      'categoryId': categoryId,
+                      'subcategoryId': subcategoryId,
+                      'article': articleCtrl.text.trim(),
+                      'quantity': int.tryParse(qtyCtrl.text.trim()) ?? 0,
+                      'minQuantity': int.tryParse(minCtrl.text.trim()) ?? 0,
+                      'location': locationCtrl.text.trim(),
+                      'notes': notesCtrl.text.trim(),
+                      'updatedAt': DateTime.now().toIso8601String(),
+                    };
+                    setState(() {
+                      if (isEdit) {
+                        items[editIndex] = item;
+                      } else {
+                        items.add(item);
+                      }
+                    });
+                    await _saveItems();
+                    if (context.mounted) Navigator.pop(context);
+                  },
+                  child: Text(isEdit ? 'Сохранить' : 'Добавить'),
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -222,7 +432,7 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
       items[index]['quantity'] = (current + delta).clamp(0, 999999);
       items[index]['updatedAt'] = DateTime.now().toIso8601String();
     });
-    await _save();
+    await _saveItems();
   }
 
   Future<void> _deleteItem(int index) async {
@@ -246,7 +456,7 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
     );
     if (confirmed == true) {
       setState(() => items.removeAt(index));
-      await _save();
+      await _saveItems();
     }
   }
 
@@ -258,11 +468,12 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
 
     final filtered = _filtered;
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final currentCat = _findCategory(categoryFilter);
+    final currentSubs = (currentCat?['subcategories'] as List?) ?? const [];
 
     return Scaffold(
       body: Column(
         children: [
-          // Сводка "мало на складе"
           if (_lowCount > 0)
             Container(
               margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
@@ -290,21 +501,128 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
               ),
             ),
 
-          // Поиск
+          // Поиск + кнопка категорий
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-            child: TextField(
-              decoration: InputDecoration(
-                hintText: 'Поиск по названию, артикулу, месту',
-                prefixIcon: const Icon(Icons.search),
-                isDense: true,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    decoration: InputDecoration(
+                      hintText: 'Поиск',
+                      prefixIcon: const Icon(Icons.search),
+                      isDense: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    onChanged: (v) => setState(() => searchQuery = v),
+                  ),
                 ),
-              ),
-              onChanged: (v) => setState(() => searchQuery = v),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  tooltip: 'Категории',
+                  style: IconButton.styleFrom(
+                    backgroundColor: const Color(0xFF1B5E20),
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const WarehouseCategoriesScreen(),
+                      ),
+                    );
+                    await _reloadCategories();
+                  },
+                  icon: const Icon(Icons.folder_outlined),
+                ),
+              ],
             ),
           ),
+
+          // Категории
+          SizedBox(
+            height: 40,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              children: [
+                ChoiceChip(
+                  label: const Text('Все'),
+                  selected: categoryFilter == null,
+                  onSelected: (_) => setState(() {
+                    categoryFilter = null;
+                    subcategoryFilter = null;
+                  }),
+                ),
+                const SizedBox(width: 8),
+                ...categories.map((c) {
+                  final count = items
+                      .where((i) => i['categoryId'] == c['id'])
+                      .length;
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: ChoiceChip(
+                      label: Text('${c['name']} ($count)'),
+                      selected: categoryFilter == c['id'],
+                      onSelected: (_) => setState(() {
+                        categoryFilter = c['id'].toString();
+                        subcategoryFilter = null;
+                      }),
+                    ),
+                  );
+                }),
+              ],
+            ),
+          ),
+
+          // Подкатегории (если выбрана категория)
+          if (categoryFilter != null && currentSubs.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            SizedBox(
+              height: 34,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                children: [
+                  ChoiceChip(
+                    label: const Text(
+                      'Все подкатегории',
+                      style: TextStyle(fontSize: 11),
+                    ),
+                    selected: subcategoryFilter == null,
+                    onSelected: (_) => setState(() => subcategoryFilter = null),
+                  ),
+                  const SizedBox(width: 8),
+                  ...currentSubs.map((s) {
+                    final subId = s['id'].toString();
+                    final count = items
+                        .where(
+                          (i) =>
+                              i['categoryId'] == categoryFilter &&
+                              i['subcategoryId'] == subId,
+                        )
+                        .length;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        label: Text(
+                          '${s['name']} ($count)',
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                        selected: subcategoryFilter == subId,
+                        onSelected: (_) =>
+                            setState(() => subcategoryFilter = subId),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            ),
+          ],
+
+          const SizedBox(height: 8),
 
           // Сортировка
           SizedBox(
@@ -357,6 +675,12 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
                       final isOut = qty <= 0;
                       final isLow = !isOut && min > 0 && qty <= min;
 
+                      final cat = _findCategory(item['categoryId']?.toString());
+                      final sub = _findSubcategory(
+                        item['categoryId']?.toString(),
+                        item['subcategoryId']?.toString(),
+                      );
+
                       return Dismissible(
                         key: ValueKey(item['id'] ?? index.toString()),
                         direction: DismissDirection.endToStart,
@@ -396,7 +720,6 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
                               padding: const EdgeInsets.all(12),
                               child: Row(
                                 children: [
-                                  // Количество с +/- кнопками
                                   Column(
                                     children: [
                                       IconButton(
@@ -455,8 +778,6 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
                                     ],
                                   ),
                                   const SizedBox(width: 8),
-
-                                  // Информация о запчасти
                                   Expanded(
                                     child: Column(
                                       crossAxisAlignment:
@@ -469,6 +790,29 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
                                             fontWeight: FontWeight.bold,
                                           ),
                                         ),
+                                        if (cat != null)
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                              top: 2,
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                const Icon(
+                                                  Icons.folder_outlined,
+                                                  size: 11,
+                                                  color: Colors.blueGrey,
+                                                ),
+                                                const SizedBox(width: 3),
+                                                Text(
+                                                  '${cat['name']}${sub != null ? ' → ${sub['name']}' : ''}',
+                                                  style: const TextStyle(
+                                                    fontSize: 11,
+                                                    color: Colors.blueGrey,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
                                         if ((item['article'] ?? '')
                                             .toString()
                                             .isNotEmpty)
