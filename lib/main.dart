@@ -15,6 +15,8 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'screens/settings_screen.dart';
+
 void main() {
   runApp(const ZavodMechanikApp());
 }
@@ -382,6 +384,50 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
+  Future<void> _showAbout() async {
+    final prefs = await SharedPreferences.getInstance();
+    final tasksCount = prefs.getString('tasks') != null ? 'есть' : 'нет';
+    final equipmentCount = prefs.getString('equipment') != null
+        ? 'есть'
+        : 'нет';
+
+    if (!mounted) return;
+    showAboutDialog(
+      context: context,
+      applicationName: 'Завод-Механик',
+      applicationVersion: 'Версия 1.0.0 (сборка 1)',
+      applicationIcon: const Icon(
+        Icons.build,
+        size: 40,
+        color: Color(0xFF1B5E20),
+      ),
+      children: [
+        const SizedBox(height: 12),
+        const Text(
+          'Планировщик для мастера-механика.\n'
+          'Задачи, оборудование, счётчики, регламенты, отчёты.',
+        ),
+        const SizedBox(height: 12),
+        const Divider(),
+        const SizedBox(height: 8),
+        const Text(
+          'Данные в системе:',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 4),
+        Text('• Задачи: $tasksCount'),
+        Text('• Оборудование: $equipmentCount'),
+        const SizedBox(height: 12),
+        const Divider(),
+        const SizedBox(height: 8),
+        const Text(
+          'Все данные хранятся локально и не удаляются при обновлении.',
+          style: TextStyle(fontSize: 11, color: Colors.grey),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -394,6 +440,21 @@ class _MainScreenState extends State<MainScreen> {
             : const Color(0xFF1B5E20),
         foregroundColor: isDark ? null : Colors.white,
         actions: [
+          IconButton(
+            tooltip: 'Настройки',
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SettingsScreen()),
+              );
+            },
+          ),
+          IconButton(
+            tooltip: 'О программе',
+            icon: const Icon(Icons.info_outline),
+            onPressed: _showAbout,
+          ),
           IconButton(
             tooltip: isDark ? 'Светлая тема' : 'Тёмная тема',
             icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),

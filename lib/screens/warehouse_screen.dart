@@ -498,8 +498,26 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
 
                                       Navigator.pop(context);
                                       try {
+                                        final prefs =
+                                            await SharedPreferences.getInstance();
                                         await PdfService.generatePurchaseRequest(
                                           items: orderItems,
+                                          company:
+                                              prefs.getString('req_company') ??
+                                              'ООО "Агама-строй"',
+                                          director:
+                                              prefs.getString('req_director') ??
+                                              'Генералову С.И.',
+                                          mechanicGenitive:
+                                              prefs.getString(
+                                                'req_mechanic_genitive',
+                                              ) ??
+                                              'Ефимова И.В.',
+                                          mechanicNominative:
+                                              prefs.getString(
+                                                'req_mechanic_nominative',
+                                              ) ??
+                                              'Ефимов И.В.',
                                         );
                                       } catch (e) {
                                         if (mounted) {
