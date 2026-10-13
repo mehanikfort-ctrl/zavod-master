@@ -24,7 +24,9 @@ class _TasksScreenState extends State<TasksScreen> {
   String? priorityFilter;
   String? categoryFilter;
   String? equipmentFilter;
-  bool showOnlyCompleted = false;
+
+  // 0 = Активные, 1 = Готово, 2 = Архив
+  int _viewMode = 0;
 
   final List<String> categories = [
     '💧 Вода',
@@ -53,6 +55,7 @@ class _TasksScreenState extends State<TasksScreen> {
       tasks = decoded.map((e) => Map<String, dynamic>.from(e)).toList();
       for (final t in tasks) {
         t.putIfAbsent('completed', () => false);
+        t.putIfAbsent('archived', () => false);
         t.putIfAbsent('comments', () => <Map<String, dynamic>>[]);
         t.putIfAbsent('photos', () => <String>[]);
       }
@@ -65,6 +68,7 @@ class _TasksScreenState extends State<TasksScreen> {
           'time': 'Сегодня, 10:00',
           'equipmentId': null,
           'completed': false,
+          'archived': false,
           'comments': <Map<String, dynamic>>[],
           'photos': <String>[],
         },
@@ -92,11 +96,6 @@ class _TasksScreenState extends State<TasksScreen> {
     return eq['name'] as String?;
   }
 
-  // ============ ФАЙЛЫ ФОТО ============
-
-  /// Возвращает папку приложения, где хранятся фото задач.
-  /// Windows: C:\Users\<user>\AppData\Roaming\zavod_master\photos
-  /// Android: /data/data/<package>/files/photos
   Future<Directory> _getPhotosDir() async {
     final supportDir = await getApplicationSupportDirectory();
     final photosDir = Directory(
@@ -108,8 +107,6 @@ class _TasksScreenState extends State<TasksScreen> {
     return photosDir;
   }
 
-  /// Копирует внешний файл в папку приложения.
-  /// Возвращает новый путь или null, если не получилось.
   Future<String?> _copyPhotoToApp(String sourcePath) async {
     try {
       final src = File(sourcePath);
@@ -127,7 +124,6 @@ class _TasksScreenState extends State<TasksScreen> {
     }
   }
 
-  /// Удаляет файл фото с диска (тихо игнорирует ошибки).
   Future<void> _deletePhotoFile(String path) async {
     try {
       final f = File(path);
@@ -136,8 +132,6 @@ class _TasksScreenState extends State<TasksScreen> {
       }
     } catch (_) {}
   }
-
-  // ============ ПРОСМОТР ФОТО ============
 
   void _openPhoto(String path) {
     showDialog(
@@ -175,8 +169,6 @@ class _TasksScreenState extends State<TasksScreen> {
     );
   }
 
-  // ============ ФИЛЬТРЫ ============
-
   int get _activeFiltersCount {
     int count = 0;
     if (priorityFilter != null) count++;
@@ -187,8 +179,19 @@ class _TasksScreenState extends State<TasksScreen> {
 
   List<Map<String, dynamic>> get _filteredTasks {
     return tasks.where((t) {
+      final archived = t['archived'] == true;
       final completed = t['completed'] == true;
-      if (showOnlyCompleted != completed) return false;
+
+      if (_viewMode == 2) {
+        // Архив: только archived
+        if (!archived) return false;
+      } else if (_viewMode == 1) {
+        // Готово: completed и НЕ archived
+        if (!completed || archived) return false;
+      } else {
+        // Активные: НЕ completed и НЕ archived
+        if (completed || archived) return false;
+      }
 
       if (searchQuery.isNotEmpty) {
         final q = searchQuery.toLowerCase();
@@ -212,8 +215,13 @@ class _TasksScreenState extends State<TasksScreen> {
     }).toList();
   }
 
-  int get _activeCount => tasks.where((t) => t['completed'] != true).length;
-  int get _doneCount => tasks.where((t) => t['completed'] == true).length;
+  int get _activeCount => tasks
+      .where((t) => t['completed'] != true && t['archived'] != true)
+      .length;
+  int get _doneCount => tasks
+      .where((t) => t['completed'] == true && t['archived'] != true)
+      .length;
+  int get _archivedCount => tasks.where((t) => t['archived'] == true).length;
 
   void _resetFilters() {
     setState(() {
@@ -349,8 +357,6 @@ class _TasksScreenState extends State<TasksScreen> {
     );
   }
 
-  // ============ ДИАЛОГ ЗАДАЧИ ============
-
   Future<void> _showTaskDialog({int? editIndex}) async {
     final bool isEdit = editIndex != null;
     final existing = isEdit ? tasks[editIndex] : null;
@@ -372,15 +378,12 @@ class _TasksScreenState extends State<TasksScreen> {
               .toList()
         : [];
 
-    // Список актуальных путей фото (уже в папке приложения).
     List<String> photos = isEdit
         ? ((existing?['photos'] as List?) ?? [])
               .map((e) => e.toString())
               .toList()
         : [];
 
-    // Новые фото, добавленные в этом сеансе диалога.
-    // Нужны, чтобы удалить их, если пользователь нажмёт "Отмена".
     final List<String> newlyAddedPhotos = [];
 
     if (isEdit && existing?['time'] != null) {
@@ -421,7 +424,7 @@ class _TasksScreenState extends State<TasksScreen> {
               setStateDialog(() {
                 comments.add({
                   'text': text,
-                  'author': 'Мастер',
+                  'author': 'Механик',
                   'createdAt': DateTime.now().toIso8601String(),
                 });
                 commentController.clear();
@@ -439,7 +442,6 @@ class _TasksScreenState extends State<TasksScreen> {
                 );
                 if (files.isEmpty) return;
 
-                // Копируем каждый файл в папку приложения
                 for (final f in files) {
                   final savedPath = await _copyPhotoToApp(f.path);
                   if (savedPath != null) {
@@ -457,20 +459,14 @@ class _TasksScreenState extends State<TasksScreen> {
               }
             }
 
-            // Удаление фото из списка (и с диска, если оно уже сохранено)
             Future<void> removePhoto(int index) async {
               final path = photos[index];
               setStateDialog(() => photos.removeAt(index));
               newlyAddedPhotos.remove(path);
-              // Если это фото уже было в задаче (не в этом сеансе) — удаляем
-              // его с диска сразу. Если это новое — удалим при отмене или
-              // при сохранении (если не останется в списке).
-              if (isEdit && !newlyAddedPhotos.contains(path)) {
-                await _deletePhotoFile(path);
-              } else {
-                await _deletePhotoFile(path);
-              }
+              await _deletePhotoFile(path);
             }
+
+            final isArchived = isEdit && existing?['archived'] == true;
 
             return AlertDialog(
               title: Text(isEdit ? 'Задача' : 'Новая задача'),
@@ -588,6 +584,36 @@ class _TasksScreenState extends State<TasksScreen> {
                           ),
                         ],
                       ),
+
+                      // Кнопка "В архив" / "Вернуть из архива"
+                      if (isEdit) ...[
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: () async {
+                              setState(() {
+                                tasks[editIndex]['archived'] =
+                                    !(tasks[editIndex]['archived'] == true);
+                              });
+                              await _saveTasks();
+                              if (context.mounted) Navigator.pop(context);
+                              setState(() {});
+                            },
+                            icon: Icon(
+                              isArchived
+                                  ? Icons.unarchive_outlined
+                                  : Icons.archive_outlined,
+                              size: 18,
+                            ),
+                            label: Text(
+                              isArchived
+                                  ? 'Вернуть из архива'
+                                  : 'Отправить в архив',
+                            ),
+                          ),
+                        ),
+                      ],
 
                       // ====== ФОТО ======
                       if (isEdit) ...[
@@ -850,7 +876,6 @@ class _TasksScreenState extends State<TasksScreen> {
               actions: [
                 TextButton(
                   onPressed: () async {
-                    // Отмена: удаляем все НОВЫЕ фото, которые успели скопировать
                     for (final p in newlyAddedPhotos) {
                       await _deletePhotoFile(p);
                     }
@@ -866,9 +891,6 @@ class _TasksScreenState extends State<TasksScreen> {
                   onPressed: () async {
                     if (titleController.text.trim().isEmpty) return;
 
-                    // Финальная проверка: удалить новые фото, которые пользователь
-                    // убрал из списка (на случай, если обработчик removePhoto
-                    // не успел сработать).
                     final toDelete = newlyAddedPhotos
                         .where((p) => !photos.contains(p))
                         .toList();
@@ -903,6 +925,7 @@ class _TasksScreenState extends State<TasksScreen> {
                           'time': timeLabel,
                           'equipmentId': selectedEquipmentId,
                           'completed': false,
+                          'archived': false,
                           'comments': <Map<String, dynamic>>[],
                           'photos': <String>[],
                         });
@@ -928,11 +951,25 @@ class _TasksScreenState extends State<TasksScreen> {
     await _saveTasks();
   }
 
+  Future<void> _archiveTask(int index) async {
+    setState(() {
+      tasks[index]['archived'] = true;
+      tasks[index]['completed'] = true;
+    });
+    await _saveTasks();
+  }
+
+  Future<void> _unarchiveTask(int index) async {
+    setState(() {
+      tasks[index]['archived'] = false;
+    });
+    await _saveTasks();
+  }
+
   Future<void> _deleteTask(int index) async {
     final realIndex = tasks.indexOf(_filteredTasks[index]);
     if (realIndex < 0) return;
 
-    // Удаляем фото задачи с диска
     final task = tasks[realIndex];
     final photosList = (task['photos'] as List?) ?? [];
     for (final p in photosList) {
@@ -943,6 +980,35 @@ class _TasksScreenState extends State<TasksScreen> {
     await _saveTasks();
   }
 
+  Future<void> _confirmArchive(int index) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Отправить в архив?'),
+        content: const Text(
+          'Задача переместится в архив. Её можно будет вернуть оттуда.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Отмена'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF1B5E20),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('В архив'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await _archiveTask(index);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (isLoading) {
@@ -950,30 +1016,58 @@ class _TasksScreenState extends State<TasksScreen> {
     }
 
     final filtered = _filteredTasks;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
 
     return Scaffold(
       body: Column(
         children: [
+          // Переключатель: Активные / Готово / Архив
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-            child: SegmentedButton<bool>(
-              segments: [
-                ButtonSegment(
-                  value: false,
-                  label: Text('Активные ($_activeCount)'),
-                  icon: const Icon(Icons.pending_actions, size: 16),
-                ),
-                ButtonSegment(
-                  value: true,
-                  label: Text('Готово ($_doneCount)'),
-                  icon: const Icon(Icons.check_circle, size: 16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: SegmentedButton<int>(
+                    segments: [
+                      ButtonSegment(
+                        value: 0,
+                        label: Text(
+                          'Активные ($_activeCount)',
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                      ),
+                      ButtonSegment(
+                        value: 1,
+                        label: Text(
+                          'Готово ($_doneCount)',
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                      ),
+                      ButtonSegment(
+                        value: 2,
+                        label: Text(
+                          'Архив ($_archivedCount)',
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                      ),
+                    ],
+                    selected: {_viewMode},
+                    onSelectionChanged: (s) =>
+                        setState(() => _viewMode = s.first),
+                    style: ButtonStyle(
+                      visualDensity: VisualDensity.compact,
+                      padding: WidgetStatePropertyAll(
+                        const EdgeInsets.symmetric(horizontal: 4),
+                      ),
+                    ),
+                  ),
                 ),
               ],
-              selected: {showOnlyCompleted},
-              onSelectionChanged: (s) =>
-                  setState(() => showOnlyCompleted = s.first),
             ),
           ),
+
+          // Поиск + фильтры
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
             child: Row(
@@ -1027,6 +1121,8 @@ class _TasksScreenState extends State<TasksScreen> {
               ],
             ),
           ),
+
+          // Чипы приоритетов
           SizedBox(
             height: 40,
             child: ListView(
@@ -1059,11 +1155,14 @@ class _TasksScreenState extends State<TasksScreen> {
             ),
           ),
           const SizedBox(height: 4),
+
           Expanded(
             child: filtered.isEmpty
                 ? Center(
                     child: Text(
-                      showOnlyCompleted
+                      _viewMode == 2
+                          ? 'Архив пуст.\nСюда попадают выполненные задачи старше 30 дней.'
+                          : _viewMode == 1
                           ? 'Выполненных задач пока нет.'
                           : 'Активных задач нет.\nНажми «+», чтобы добавить.',
                       textAlign: TextAlign.center,
@@ -1078,6 +1177,7 @@ class _TasksScreenState extends State<TasksScreen> {
                       final eqName = _equipmentName(task['equipmentId']);
                       final realIndex = tasks.indexOf(task);
                       final isDone = task['completed'] == true;
+                      final isArchived = task['archived'] == true;
                       final commentCount =
                           (task['comments'] as List?)?.length ?? 0;
                       final photoCount = (task['photos'] as List?)?.length ?? 0;
@@ -1087,6 +1187,36 @@ class _TasksScreenState extends State<TasksScreen> {
                           '${task['title']}_${task['time']}_$index',
                         ),
                         direction: DismissDirection.endToStart,
+                        confirmDismiss: (direction) async {
+                          if (isArchived) {
+                            final ok = await showDialog<bool>(
+                              context: context,
+                              builder: (context) => AlertDialog(
+                                title: const Text('Удалить навсегда?'),
+                                content: Text(
+                                  '«${task['title']}» будет удалена окончательно.',
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.pop(context, false),
+                                    child: const Text('Отмена'),
+                                  ),
+                                  ElevatedButton(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.red,
+                                    ),
+                                    onPressed: () =>
+                                        Navigator.pop(context, true),
+                                    child: const Text('Удалить'),
+                                  ),
+                                ],
+                              ),
+                            );
+                            return ok == true;
+                          }
+                          return true;
+                        },
                         background: Container(
                           margin: const EdgeInsets.only(bottom: 12),
                           padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -1101,18 +1231,26 @@ class _TasksScreenState extends State<TasksScreen> {
                         child: Card(
                           margin: const EdgeInsets.only(bottom: 12),
                           elevation: isDone ? 0 : 2,
-                          color: isDone ? Colors.grey.shade100 : null,
+                          color: isDark
+                              ? (isDone ? Colors.grey.shade900 : null)
+                              : (isDone ? Colors.grey.shade100 : null),
                           child: ListTile(
                             leading: IconButton(
                               icon: Icon(
-                                isDone
-                                    ? Icons.check_circle
-                                    : Icons.radio_button_unchecked,
-                                color: isDone
-                                    ? const Color(0xFF1B5E20)
-                                    : Colors.grey,
+                                isArchived
+                                    ? Icons.archive
+                                    : (isDone
+                                          ? Icons.check_circle
+                                          : Icons.radio_button_unchecked),
+                                color: isArchived
+                                    ? Colors.grey
+                                    : (isDone
+                                          ? const Color(0xFF1B5E20)
+                                          : Colors.grey),
                               ),
-                              onPressed: () => _toggleCompleted(realIndex),
+                              onPressed: isArchived
+                                  ? () => _unarchiveTask(realIndex)
+                                  : () => _toggleCompleted(realIndex),
                             ),
                             title: Text(
                               task['title'],
@@ -1199,12 +1337,53 @@ class _TasksScreenState extends State<TasksScreen> {
                                 ],
                               ),
                             ),
-                            trailing: Text(
-                              task['time'],
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey,
-                              ),
+                            trailing: PopupMenuButton<String>(
+                              onSelected: (value) {
+                                if (value == 'archive') {
+                                  _confirmArchive(realIndex);
+                                } else if (value == 'unarchive') {
+                                  _unarchiveTask(realIndex);
+                                } else if (value == 'edit') {
+                                  _showTaskDialog(editIndex: realIndex);
+                                }
+                              },
+                              itemBuilder: (context) => [
+                                PopupMenuItem(
+                                  value: 'edit',
+                                  child: Row(
+                                    children: const [
+                                      Icon(Icons.edit, size: 18),
+                                      SizedBox(width: 8),
+                                      Text('Редактировать'),
+                                    ],
+                                  ),
+                                ),
+                                if (!isArchived)
+                                  PopupMenuItem(
+                                    value: 'archive',
+                                    child: Row(
+                                      children: const [
+                                        Icon(Icons.archive_outlined, size: 18),
+                                        SizedBox(width: 8),
+                                        Text('В архив'),
+                                      ],
+                                    ),
+                                  ),
+                                if (isArchived)
+                                  PopupMenuItem(
+                                    value: 'unarchive',
+                                    child: Row(
+                                      children: const [
+                                        Icon(
+                                          Icons.unarchive_outlined,
+                                          size: 18,
+                                        ),
+                                        SizedBox(width: 8),
+                                        Text('Вернуть из архива'),
+                                      ],
+                                    ),
+                                  ),
+                              ],
                             ),
                             onTap: () => _showTaskDialog(editIndex: realIndex),
                           ),
@@ -1215,12 +1394,14 @@ class _TasksScreenState extends State<TasksScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => _showTaskDialog(),
-        backgroundColor: const Color(0xFF1B5E20),
-        foregroundColor: Colors.white,
-        child: const Icon(Icons.add),
-      ),
+      floatingActionButton: _viewMode == 2
+          ? null
+          : FloatingActionButton(
+              onPressed: () => _showTaskDialog(),
+              backgroundColor: const Color(0xFF1B5E20),
+              foregroundColor: Colors.white,
+              child: const Icon(Icons.add),
+            ),
     );
   }
 }

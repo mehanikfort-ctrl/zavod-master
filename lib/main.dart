@@ -125,6 +125,7 @@ class _MainScreenState extends State<MainScreen> {
     super.initState();
     _initNotifications();
     _checkRegulations();
+    _autoArchive();
   }
 
   Future<void> _initNotifications() async {
@@ -332,6 +333,47 @@ class _MainScreenState extends State<MainScreen> {
     if (changed) {
       await prefs.setString('tasks', jsonEncode(tasks));
       await prefs.setString('regulations', jsonEncode(regs));
+    }
+  }
+
+  /// Автоматически убирает в архив выполненные задачи старше 30 дней.
+  Future<void> _autoArchive() async {
+    final prefs = await SharedPreferences.getInstance();
+    final rawTasks = prefs.getString('tasks');
+    if (rawTasks == null || rawTasks.isEmpty) return;
+
+    final List<dynamic> decoded = jsonDecode(rawTasks);
+    final List<Map<String, dynamic>> tasks = decoded
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+
+    final now = DateTime.now();
+    final threshold = now.subtract(const Duration(days: 30));
+    bool changed = false;
+
+    for (final t in tasks) {
+      if (t['completed'] != true) continue;
+      if (t['archived'] == true) continue;
+
+      final timeStr = t['time']?.toString() ?? '';
+      final m = RegExp(r'(\d{2})\.(\d{2})\.(\d{4})').firstMatch(timeStr);
+      if (m == null) continue;
+
+      try {
+        final d = DateTime(
+          int.parse(m.group(3)!),
+          int.parse(m.group(2)!),
+          int.parse(m.group(1)!),
+        );
+        if (d.isBefore(threshold)) {
+          t['archived'] = true;
+          changed = true;
+        }
+      } catch (_) {}
+    }
+
+    if (changed) {
+      await prefs.setString('tasks', jsonEncode(tasks));
     }
   }
 
