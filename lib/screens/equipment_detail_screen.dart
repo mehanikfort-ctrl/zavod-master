@@ -7,6 +7,8 @@ import 'package:file_selector/file_selector.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:open_filex/open_filex.dart';
 
+import '../category_style.dart';
+
 class EquipmentDetailScreen extends StatefulWidget {
   final Map<String, dynamic> equipment;
   final Future<void> Function() onChanged;
@@ -28,13 +30,16 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
   late List<Map<String, dynamic>> spareParts;
   late List<Map<String, dynamic>> files;
   List<Map<String, dynamic>> relatedTasks = [];
+  List<Map<String, dynamic>> categories = [];
+  List<Map<String, dynamic>> locations = [];
 
-  // Состояния сворачивания секций
   bool _docsExpanded = true;
   bool _historyExpanded = true;
   bool _partsExpanded = true;
 
   static const String _tasksKey = 'tasks';
+  static const String _categoriesKey = 'warehouse_categories';
+  static const String _locationsKey = 'equipment_locations';
 
   @override
   void initState() {
@@ -49,6 +54,37 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
         .map((e) => Map<String, dynamic>.from(e))
         .toList();
     _loadRelatedTasks();
+    _loadCategories();
+    _loadLocations();
+  }
+
+  Future<void> _loadCategories() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_categoriesKey);
+    if (raw != null && raw.isNotEmpty) {
+      setState(() {
+        categories = (jsonDecode(raw) as List)
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+        for (final c in categories) {
+          c.putIfAbsent('subcategories', () => <Map<String, dynamic>>[]);
+          c.putIfAbsent('icon', () => 'category');
+          c.putIfAbsent('color', () => 'green');
+        }
+      });
+    }
+  }
+
+  Future<void> _loadLocations() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_locationsKey);
+    if (raw != null && raw.isNotEmpty) {
+      setState(() {
+        locations = (jsonDecode(raw) as List)
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+      });
+    }
   }
 
   Future<void> _loadRelatedTasks() async {
@@ -67,6 +103,20 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
     }
   }
 
+  Map<String, dynamic>? _findCategory(String? id) {
+    if (id == null) return null;
+    for (final c in categories) {
+      if (c['id'] == id) return c;
+    }
+    return null;
+  }
+
+  String? _locationName(String? id) {
+    if (id == null) return null;
+    final loc = locations.firstWhere((l) => l['id'] == id, orElse: () => {});
+    return loc['name'] as String?;
+  }
+
   @override
   void dispose() {
     descriptionCtrl.dispose();
@@ -80,6 +130,60 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text('Описание сохранено')));
     }
+  }
+
+  Future<void> _changeLocation() async {
+    String? selected = widget.equipment['locationId']?.toString();
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Место расположения'),
+              content: DropdownButtonFormField<String?>(
+                value: selected,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Выберите место'),
+                items: [
+                  const DropdownMenuItem<String?>(
+                    value: null,
+                    child: Text('— Без привязки —'),
+                  ),
+                  ...locations.map((l) {
+                    return DropdownMenuItem<String?>(
+                      value: l['id'].toString(),
+                      child: Text(l['name'] ?? ''),
+                    );
+                  }),
+                ],
+                onChanged: (v) => setDialogState(() => selected = v),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Отмена'),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1B5E20),
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: () async {
+                    setState(() {
+                      widget.equipment['locationId'] = selected;
+                    });
+                    await widget.onChanged();
+                    if (context.mounted) Navigator.pop(context);
+                  },
+                  child: const Text('Сохранить'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   // ============ ФАЙЛЫ ============
@@ -271,64 +375,160 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
 
   // ============ ЗАПЧАСТИ ============
 
-  Future<void> _addSparePart() async {
-    final nameCtrl = TextEditingController();
-    final articleCtrl = TextEditingController();
-    final qtyCtrl = TextEditingController(text: '1');
+  Future<void> _showSparePartDialog({int? editIndex}) async {
+    final isEdit = editIndex != null;
+    final existing = isEdit ? spareParts[editIndex] : null;
+
+    final nameCtrl = TextEditingController(text: existing?['name'] ?? '');
+    final articleCtrl = TextEditingController(text: existing?['article'] ?? '');
+    final qtyCtrl = TextEditingController(
+      text: (existing?['quantity'] ?? 1).toString(),
+    );
+
+    String? categoryId = existing?['categoryId']?.toString();
+    String? subcategoryId = existing?['subcategoryId']?.toString();
 
     await showDialog(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          title: const Text('Новая запчасть'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Название',
-                  hintText: 'Подшипник 6205',
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final currentCat = _findCategory(categoryId);
+            final subs = (currentCat?['subcategories'] as List?) ?? [];
+
+            return AlertDialog(
+              title: Text(isEdit ? 'Редактировать запчасть' : 'Новая запчасть'),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextField(
+                        controller: nameCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Название',
+                          hintText: 'Подшипник 6205',
+                        ),
+                        autofocus: !isEdit,
+                      ),
+                      const SizedBox(height: 12),
+                      if (categories.isNotEmpty) ...[
+                        DropdownButtonFormField<String?>(
+                          value: categoryId,
+                          isExpanded: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Категория',
+                          ),
+                          items: [
+                            const DropdownMenuItem<String?>(
+                              value: null,
+                              child: Text('— Без категории —'),
+                            ),
+                            ...categories.map((c) {
+                              return DropdownMenuItem<String?>(
+                                value: c['id'].toString(),
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      getCategoryIcon(c['icon']?.toString()),
+                                      size: 18,
+                                      color: getCategoryColor(
+                                        c['color']?.toString(),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(c['name'] ?? ''),
+                                  ],
+                                ),
+                              );
+                            }),
+                          ],
+                          onChanged: (v) => setDialogState(() {
+                            categoryId = v;
+                            subcategoryId = null;
+                          }),
+                        ),
+                        const SizedBox(height: 12),
+                        if (subs.isNotEmpty) ...[
+                          DropdownButtonFormField<String?>(
+                            value: subcategoryId,
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Подкатегория',
+                            ),
+                            items: [
+                              const DropdownMenuItem<String?>(
+                                value: null,
+                                child: Text('— Без подкатегории —'),
+                              ),
+                              ...subs.map((s) {
+                                return DropdownMenuItem<String?>(
+                                  value: s['id'].toString(),
+                                  child: Text(s['name'] ?? ''),
+                                );
+                              }),
+                            ],
+                            onChanged: (v) =>
+                                setDialogState(() => subcategoryId = v),
+                          ),
+                          const SizedBox(height: 12),
+                        ],
+                      ],
+                      TextField(
+                        controller: articleCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Артикул',
+                          hintText: 'PB-6205',
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: qtyCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Количество',
+                        ),
+                        keyboardType: TextInputType.number,
+                      ),
+                    ],
+                  ),
                 ),
-                autofocus: true,
               ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: articleCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Артикул',
-                  hintText: 'PB-6205',
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Отмена'),
                 ),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: qtyCtrl,
-                decoration: const InputDecoration(labelText: 'Количество'),
-                keyboardType: TextInputType.number,
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Отмена'),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                if (nameCtrl.text.trim().isEmpty) return;
-                spareParts.add({
-                  'name': nameCtrl.text.trim(),
-                  'article': articleCtrl.text.trim(),
-                  'quantity': int.tryParse(qtyCtrl.text.trim()) ?? 1,
-                });
-                widget.equipment['spareParts'] = spareParts;
-                await widget.onChanged();
-                if (context.mounted) Navigator.pop(context);
-                setState(() {});
-              },
-              child: const Text('Добавить'),
-            ),
-          ],
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1B5E20),
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: () async {
+                    if (nameCtrl.text.trim().isEmpty) return;
+                    final item = {
+                      'name': nameCtrl.text.trim(),
+                      'article': articleCtrl.text.trim(),
+                      'quantity': int.tryParse(qtyCtrl.text.trim()) ?? 1,
+                      'categoryId': categoryId,
+                      'subcategoryId': subcategoryId,
+                    };
+                    setState(() {
+                      if (isEdit) {
+                        spareParts[editIndex] = item;
+                      } else {
+                        spareParts.add(item);
+                      }
+                      widget.equipment['spareParts'] = spareParts;
+                    });
+                    await widget.onChanged();
+                    if (context.mounted) Navigator.pop(context);
+                  },
+                  child: Text(isEdit ? 'Сохранить' : 'Добавить'),
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -370,8 +570,6 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
     }
   }
 
-  // ============ СВОРАЧИВАЕМЫЙ ЗАГОЛОВОК ============
-
   Widget _sectionHeader({
     required IconData icon,
     required String title,
@@ -392,64 +590,51 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
           color: isDark ? Colors.grey.shade800 : color.withOpacity(0.2),
         ),
       ),
-      child: Column(
-        children: [
-          InkWell(
-            borderRadius: BorderRadius.circular(10),
-            onTap: onTap,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              child: Row(
-                children: [
-                  Icon(icon, size: 20, color: color),
-                  const SizedBox(width: 8),
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 7,
-                      vertical: 2,
-                    ),
-                    decoration: BoxDecoration(
-                      color: color.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Text(
-                      '$count',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        color: color,
-                      ),
-                    ),
-                  ),
-                  const Spacer(),
-                  if (actionButton != null && expanded) actionButton,
-                  Icon(
-                    expanded ? Icons.expand_less : Icons.expand_more,
-                    color: Colors.grey,
-                  ),
-                ],
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              Icon(icon, size: 20, color: color),
+              const SizedBox(width: 8),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
-            ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  '$count',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: color,
+                  ),
+                ),
+              ),
+              const Spacer(),
+              if (actionButton != null && expanded) actionButton,
+              Icon(
+                expanded ? Icons.expand_less : Icons.expand_more,
+                color: Colors.grey,
+              ),
+            ],
           ),
-          if (expanded)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-              child: Container(),
-            ),
-        ],
+        ),
       ),
     );
   }
 
-  // Обёртка содержимого секции (появляется, если expanded)
   Widget _sectionBody({required bool expanded, required Widget child}) {
     return AnimatedSize(
       duration: const Duration(milliseconds: 180),
@@ -463,6 +648,7 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final eq = widget.equipment;
+    final locName = _locationName(eq['locationId']?.toString());
 
     return Scaffold(
       appBar: AppBar(
@@ -480,28 +666,52 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // Место расположения (с возможностью изменить)
           Card(
             elevation: 1,
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _infoRow('Категория', eq['category'] ?? '—'),
-                  const SizedBox(height: 6),
-                  _infoRow(
-                    'Расположение',
-                    (eq['location'] ?? '').toString().isEmpty
-                        ? '—'
-                        : eq['location'],
-                  ),
-                ],
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: _changeLocation,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.place_outlined,
+                      size: 20,
+                      color: Color(0xFF1B5E20),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Место расположения',
+                            style: TextStyle(fontSize: 11, color: Colors.grey),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            locName ?? '— Не указано —',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                              color: locName != null
+                                  ? null
+                                  : Colors.grey.shade600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.edit, size: 18, color: Colors.grey),
+                  ],
+                ),
               ),
             ),
           ),
           const SizedBox(height: 16),
 
-          // ===== ОПИСАНИЕ =====
           const Text(
             'Описание',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
@@ -532,7 +742,6 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
           ),
           const SizedBox(height: 20),
 
-          // ===== ДОКУМЕНТЫ =====
           _sectionHeader(
             icon: Icons.attach_file,
             title: 'Документы',
@@ -613,7 +822,6 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
           ),
           const SizedBox(height: 12),
 
-          // ===== ИСТОРИЯ РАБОТ =====
           _sectionHeader(
             icon: Icons.history,
             title: 'История работ',
@@ -649,7 +857,6 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
           ),
           const SizedBox(height: 12),
 
-          // ===== ЗАПЧАСТИ =====
           _sectionHeader(
             icon: Icons.settings,
             title: 'Запасные части',
@@ -657,7 +864,7 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
             expanded: _partsExpanded,
             onTap: () => setState(() => _partsExpanded = !_partsExpanded),
             actionButton: TextButton.icon(
-              onPressed: _addSparePart,
+              onPressed: () => _showSparePartDialog(),
               icon: const Icon(Icons.add, size: 16),
               label: const Text('Добавить'),
               style: TextButton.styleFrom(
@@ -680,19 +887,70 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
                     children: spareParts.asMap().entries.map((entry) {
                       final i = entry.key;
                       final sp = entry.value;
+                      final cat = _findCategory(sp['categoryId']?.toString());
+
                       return Card(
                         margin: const EdgeInsets.only(bottom: 8),
                         child: ListTile(
-                          leading: const Icon(Icons.settings),
+                          leading: cat != null
+                              ? CircleAvatar(
+                                  backgroundColor: getCategoryColor(
+                                    cat['color']?.toString(),
+                                  ).withOpacity(0.15),
+                                  child: Icon(
+                                    getCategoryIcon(cat['icon']?.toString()),
+                                    color: getCategoryColor(
+                                      cat['color']?.toString(),
+                                    ),
+                                    size: 20,
+                                  ),
+                                )
+                              : const Icon(Icons.settings),
                           title: Text(sp['name'] ?? ''),
-                          subtitle: Text(
-                            'Артикул: ${(sp['article'] ?? '').toString().isEmpty ? '—' : sp['article']}  •  Кол-во: ${sp['quantity']}',
-                            style: const TextStyle(fontSize: 12),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (cat != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 2),
+                                  child: Text(
+                                    cat['name'] ?? '',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: getCategoryColor(
+                                        cat['color']?.toString(),
+                                      ),
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ),
+                              Text(
+                                'Артикул: ${(sp['article'] ?? '').toString().isEmpty ? '—' : sp['article']}  •  Кол-во: ${sp['quantity']}',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ],
                           ),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.close, color: Colors.red),
-                            onPressed: () => _deleteSparePart(i),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.edit, size: 20),
+                                tooltip: 'Редактировать',
+                                onPressed: () =>
+                                    _showSparePartDialog(editIndex: i),
+                              ),
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.close,
+                                  color: Colors.red,
+                                  size: 20,
+                                ),
+                                tooltip: 'Удалить',
+                                onPressed: () => _deleteSparePart(i),
+                              ),
+                            ],
                           ),
+                          onTap: () => _showSparePartDialog(editIndex: i),
                         ),
                       );
                     }).toList(),
@@ -701,24 +959,6 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
           const SizedBox(height: 40),
         ],
       ),
-    );
-  }
-
-  Widget _infoRow(String label, String value) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 110,
-          child: Text(label, style: const TextStyle(color: Colors.grey)),
-        ),
-        Expanded(
-          child: Text(
-            value,
-            style: const TextStyle(fontWeight: FontWeight.w500),
-          ),
-        ),
-      ],
     );
   }
 }

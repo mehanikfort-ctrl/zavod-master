@@ -4,16 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'equipment_detail_screen.dart';
-
-const List<String> equipmentCategories = [
-  '💧 Вода',
-  '⚡ Электрика',
-  '🔥 Газ',
-  '🏗️ Кран',
-  '🔧 Механика',
-  '💻 Электроника',
-  '📊 Счётчики',
-];
+import 'locations_screen.dart';
 
 class EquipmentScreen extends StatefulWidget {
   const EquipmentScreen({super.key});
@@ -24,9 +15,12 @@ class EquipmentScreen extends StatefulWidget {
 
 class _EquipmentScreenState extends State<EquipmentScreen> {
   List<Map<String, dynamic>> equipmentList = [];
+  List<Map<String, dynamic>> locations = [];
   bool isLoading = true;
   String searchQuery = '';
+  String? locationFilter;
   static const String _storageKey = 'equipment';
+  static const String _locationsKey = 'equipment_locations';
 
   @override
   void initState() {
@@ -36,11 +30,59 @@ class _EquipmentScreenState extends State<EquipmentScreen> {
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
+
+    final rawLoc = prefs.getString(_locationsKey);
+    if (rawLoc != null && rawLoc.isNotEmpty) {
+      locations = (jsonDecode(rawLoc) as List)
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+    } else {
+      locations = [
+        {'id': 'loc_1', 'name': 'Цех №1'},
+        {'id': 'loc_2', 'name': 'Цех №2'},
+        {'id': 'loc_3', 'name': 'Котельная'},
+        {'id': 'loc_4', 'name': 'Буфер'},
+        {'id': 'loc_5', 'name': 'Склад'},
+      ];
+      await prefs.setString(_locationsKey, jsonEncode(locations));
+    }
+
     final String? raw = prefs.getString(_storageKey);
     if (raw != null && raw.isNotEmpty) {
       final List<dynamic> decoded = jsonDecode(raw);
       equipmentList = decoded.map((e) => Map<String, dynamic>.from(e)).toList();
+
+      bool migrated = false;
+      for (final e in equipmentList) {
+        e.remove('category');
+
+        final oldLoc = e['location']?.toString();
+        if (oldLoc != null && oldLoc.isNotEmpty && e['locationId'] == null) {
+          final found = locations.firstWhere(
+            (l) => l['name'].toString().toLowerCase() == oldLoc.toLowerCase(),
+            orElse: () => <String, dynamic>{},
+          );
+          if (found.isNotEmpty) {
+            e['locationId'] = found['id'];
+          } else {
+            final newLoc = {
+              'id':
+                  'loc_${DateTime.now().millisecondsSinceEpoch}_${e.hashCode}',
+              'name': oldLoc,
+            };
+            locations.add(newLoc);
+            e['locationId'] = newLoc['id'];
+          }
+          migrated = true;
+        }
+        e.remove('location');
+      }
+      if (migrated) {
+        await _save();
+        await _saveLocations();
+      }
     }
+
     setState(() => isLoading = false);
   }
 
@@ -49,21 +91,53 @@ class _EquipmentScreenState extends State<EquipmentScreen> {
     await prefs.setString(_storageKey, jsonEncode(equipmentList));
   }
 
+  Future<void> _saveLocations() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_locationsKey, jsonEncode(locations));
+  }
+
+  Future<void> _reloadLocations() async {
+    final prefs = await SharedPreferences.getInstance();
+    final rawLoc = prefs.getString(_locationsKey);
+    if (rawLoc != null && rawLoc.isNotEmpty) {
+      setState(() {
+        locations = (jsonDecode(rawLoc) as List)
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+      });
+    }
+  }
+
+  String? _locationName(String? id) {
+    if (id == null) return null;
+    final loc = locations.firstWhere((l) => l['id'] == id, orElse: () => {});
+    return loc['name'] as String?;
+  }
+
+  int _countInLocation(String locId) {
+    return equipmentList.where((e) => e['locationId'] == locId).length;
+  }
+
   List<Map<String, dynamic>> get _filtered {
-    if (searchQuery.isEmpty) return equipmentList;
-    final q = searchQuery.toLowerCase();
     return equipmentList.where((e) {
+      if (locationFilter != null && e['locationId'] != locationFilter) {
+        return false;
+      }
+      if (searchQuery.isEmpty) return true;
+      final q = searchQuery.toLowerCase();
       final name = (e['name'] ?? '').toString().toLowerCase();
-      final location = (e['location'] ?? '').toString().toLowerCase();
-      return name.contains(q) || location.contains(q);
+      final locName = (_locationName(e['locationId']?.toString()) ?? '')
+          .toLowerCase();
+      return name.contains(q) || locName.contains(q);
     }).toList();
   }
 
   Future<void> _showAddDialog() async {
     final nameCtrl = TextEditingController();
-    final locationCtrl = TextEditingController();
     final descCtrl = TextEditingController();
-    String category = equipmentCategories.first;
+    String? locationId = locations.isNotEmpty
+        ? locations.first['id'] as String
+        : null;
 
     await showDialog(
       context: context,
@@ -80,26 +154,30 @@ class _EquipmentScreenState extends State<EquipmentScreen> {
                       controller: nameCtrl,
                       decoration: const InputDecoration(
                         labelText: 'Название',
-                        hintText: 'Насос центробежный №3',
+                        hintText: 'Станок токарный 1К62',
                       ),
                       autofocus: true,
                     ),
                     const SizedBox(height: 12),
-                    DropdownButtonFormField<String>(
-                      value: category,
-                      decoration: const InputDecoration(labelText: 'Категория'),
-                      items: equipmentCategories.map((c) {
-                        return DropdownMenuItem(value: c, child: Text(c));
-                      }).toList(),
-                      onChanged: (v) => setDialogState(() => category = v!),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: locationCtrl,
+                    DropdownButtonFormField<String?>(
+                      value: locationId,
+                      isExpanded: true,
                       decoration: const InputDecoration(
-                        labelText: 'Расположение',
-                        hintText: 'Цех №2, участок А',
+                        labelText: 'Место расположения',
                       ),
+                      items: [
+                        const DropdownMenuItem<String?>(
+                          value: null,
+                          child: Text('— Без привязки —'),
+                        ),
+                        ...locations.map((l) {
+                          return DropdownMenuItem<String?>(
+                            value: l['id'].toString(),
+                            child: Text(l['name'] ?? ''),
+                          );
+                        }),
+                      ],
+                      onChanged: (v) => setDialogState(() => locationId = v),
                     ),
                     const SizedBox(height: 12),
                     TextField(
@@ -119,16 +197,20 @@ class _EquipmentScreenState extends State<EquipmentScreen> {
                   child: const Text('Отмена'),
                 ),
                 ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1B5E20),
+                    foregroundColor: Colors.white,
+                  ),
                   onPressed: () async {
                     if (nameCtrl.text.trim().isEmpty) return;
                     setState(() {
                       equipmentList.add({
                         'id': DateTime.now().millisecondsSinceEpoch.toString(),
                         'name': nameCtrl.text.trim(),
-                        'category': category,
-                        'location': locationCtrl.text.trim(),
+                        'locationId': locationId,
                         'description': descCtrl.text.trim(),
                         'spareParts': <Map<String, dynamic>>[],
+                        'files': <Map<String, dynamic>>[],
                       });
                     });
                     await _save();
@@ -178,18 +260,75 @@ class _EquipmentScreenState extends State<EquipmentScreen> {
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.all(12),
-            child: TextField(
-              decoration: InputDecoration(
-                hintText: 'Поиск по названию или месту',
-                prefixIcon: const Icon(Icons.search),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    decoration: InputDecoration(
+                      hintText: 'Поиск',
+                      prefixIcon: const Icon(Icons.search),
+                      isDense: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    onChanged: (v) => setState(() => searchQuery = v),
+                  ),
                 ),
-              ),
-              onChanged: (v) => setState(() => searchQuery = v),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  tooltip: 'Места расположения',
+                  style: IconButton.styleFrom(
+                    backgroundColor: const Color(0xFF1B5E20),
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const LocationsScreen(),
+                      ),
+                    );
+                    await _reloadLocations();
+                  },
+                  icon: const Icon(Icons.place_outlined),
+                ),
+              ],
             ),
           ),
+
+          if (locations.isNotEmpty)
+            SizedBox(
+              height: 40,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                children: [
+                  ChoiceChip(
+                    label: Text('Все (${equipmentList.length})'),
+                    selected: locationFilter == null,
+                    onSelected: (_) => setState(() => locationFilter = null),
+                  ),
+                  const SizedBox(width: 8),
+                  ...locations.map((l) {
+                    final count = _countInLocation(l['id'].toString());
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        avatar: const Icon(Icons.place, size: 16),
+                        label: Text('${l['name']} ($count)'),
+                        selected: locationFilter == l['id'],
+                        onSelected: (_) =>
+                            setState(() => locationFilter = l['id'].toString()),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            ),
+          const SizedBox(height: 8),
+
           Expanded(
             child: filtered.isEmpty
                 ? Center(
@@ -207,6 +346,11 @@ class _EquipmentScreenState extends State<EquipmentScreen> {
                     itemBuilder: (context, index) {
                       final eq = filtered[index];
                       final parts = (eq['spareParts'] as List?)?.length ?? 0;
+                      final files = (eq['files'] as List?)?.length ?? 0;
+                      final locName = _locationName(
+                        eq['locationId']?.toString(),
+                      );
+
                       return Dismissible(
                         key: ValueKey(eq['id'] ?? index.toString()),
                         direction: DismissDirection.endToStart,
@@ -234,15 +378,59 @@ class _EquipmentScreenState extends State<EquipmentScreen> {
                             subtitle: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                if ((eq['location'] ?? '')
-                                    .toString()
-                                    .isNotEmpty)
-                                  Text(eq['location']),
-                                Text(
-                                  '${eq['category']}  •  Запчастей: $parts',
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey,
+                                if (locName != null)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 2),
+                                    child: Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.place,
+                                          size: 12,
+                                          color: Color(0xFF1B5E20),
+                                        ),
+                                        const SizedBox(width: 3),
+                                        Text(
+                                          locName,
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            color: Color(0xFF1B5E20),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.settings,
+                                        size: 12,
+                                        color: Colors.grey,
+                                      ),
+                                      const SizedBox(width: 3),
+                                      Text(
+                                        '$parts запч.',
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          color: Colors.grey,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 10),
+                                      const Icon(
+                                        Icons.attach_file,
+                                        size: 12,
+                                        color: Colors.grey,
+                                      ),
+                                      const SizedBox(width: 3),
+                                      Text(
+                                        '$files док.',
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          color: Colors.grey,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
                               ],
