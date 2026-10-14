@@ -6,6 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'task_categories_screen.dart';
+
 class TasksScreen extends StatefulWidget {
   const TasksScreen({super.key});
 
@@ -16,19 +18,15 @@ class TasksScreen extends StatefulWidget {
 class _TasksScreenState extends State<TasksScreen> {
   List<Map<String, dynamic>> tasks = [];
   List<Map<String, dynamic>> equipmentList = [];
+  List<String> categories = [];
   bool isLoading = true;
+
   static const String _storageKey = 'tasks';
   static const String _equipmentKey = 'equipment';
   static const String _warehouseKey = 'warehouse';
+  static const String _categoriesKey = 'task_categories';
 
-  String searchQuery = '';
-  String? priorityFilter;
-  String? categoryFilter;
-  String? equipmentFilter;
-
-  int _viewMode = 0; // 0=Активные, 1=Готово, 2=Архив
-
-  final List<String> categories = [
+  static const List<String> _defaultCategories = [
     '💧 Вода',
     '⚡ Электрика',
     '🔥 Газ',
@@ -37,6 +35,13 @@ class _TasksScreenState extends State<TasksScreen> {
     '💻 Электроника',
     '📊 Счётчики',
   ];
+
+  String searchQuery = '';
+  String? priorityFilter;
+  String? categoryFilter;
+  String? equipmentFilter;
+
+  int _viewMode = 0; // 0=Активные, 1=Готово, 2=Архив
 
   final List<String> priorities = ['🔴 Срочно', '🟡 Средний', '🟢 Плановое'];
 
@@ -49,6 +54,18 @@ class _TasksScreenState extends State<TasksScreen> {
   Future<void> _loadAll() async {
     final prefs = await SharedPreferences.getInstance();
 
+    // Категории
+    final rawCats = prefs.getString(_categoriesKey);
+    if (rawCats != null && rawCats.isNotEmpty) {
+      categories = (jsonDecode(rawCats) as List)
+          .map((e) => e.toString())
+          .toList();
+    } else {
+      categories = List<String>.from(_defaultCategories);
+      await prefs.setString(_categoriesKey, jsonEncode(categories));
+    }
+
+    // Задачи
     final String? rawTasks = prefs.getString(_storageKey);
     if (rawTasks != null && rawTasks.isNotEmpty) {
       final List<dynamic> decoded = jsonDecode(rawTasks);
@@ -78,6 +95,7 @@ class _TasksScreenState extends State<TasksScreen> {
       await _saveTasks();
     }
 
+    // Оборудование
     final String? rawEq = prefs.getString(_equipmentKey);
     if (rawEq != null && rawEq.isNotEmpty) {
       final List<dynamic> decoded = jsonDecode(rawEq);
@@ -92,10 +110,23 @@ class _TasksScreenState extends State<TasksScreen> {
     await prefs.setString(_storageKey, jsonEncode(tasks));
   }
 
-  // ============ СКЛАД: списание / возврат ============
+  Future<void> _reloadCategories() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_categoriesKey);
+    if (raw != null && raw.isNotEmpty) {
+      setState(() {
+        categories = (jsonDecode(raw) as List)
+            .map((e) => e.toString())
+            .toList();
+        if (categoryFilter != null && !categories.contains(categoryFilter)) {
+          categoryFilter = null;
+        }
+      });
+    }
+  }
 
-  /// Применяет разницу между oldMaterials и newMaterials к складу.
-  /// Разница положительная → списываем, отрицательная → возвращаем.
+  // ============ СКЛАД ============
+
   Future<void> _applyMaterialsDiff({
     required List<Map<String, dynamic>> oldMaterials,
     required List<Map<String, dynamic>> newMaterials,
@@ -132,7 +163,6 @@ class _TasksScreenState extends State<TasksScreen> {
     await prefs.setString(_warehouseKey, jsonEncode(warehouse));
   }
 
-  /// Возвращает все материалы задачи на склад (при удалении).
   Future<void> _returnMaterialsToWarehouse(
     List<Map<String, dynamic>> materials,
   ) async {
@@ -632,7 +662,13 @@ class _TasksScreenState extends State<TasksScreen> {
     );
     final TextEditingController commentController = TextEditingController();
 
-    String selectedCategory = existing?['category'] ?? '🔧 Механика';
+    // Категория — если текущей нет в списке, берем первую
+    String selectedCategory = existing?['category']?.toString() ?? '';
+    if (selectedCategory.isEmpty ||
+        (categories.isNotEmpty && !categories.contains(selectedCategory))) {
+      selectedCategory = categories.isNotEmpty ? categories.first : 'Разное';
+    }
+
     String selectedPriority = existing?['priority'] ?? '🟡 Средний';
     String? selectedEquipmentId = existing?['equipmentId'];
     DateTime? selectedDate;
@@ -823,18 +859,52 @@ class _TasksScreenState extends State<TasksScreen> {
                             setStateDialog(() => selectedEquipmentId = v),
                       ),
                       const SizedBox(height: 12),
-                      DropdownButtonFormField<String>(
-                        value: selectedCategory,
-                        decoration: const InputDecoration(
-                          labelText: 'Категория',
-                        ),
-                        items: categories
-                            .map(
-                              (c) => DropdownMenuItem(value: c, child: Text(c)),
-                            )
-                            .toList(),
-                        onChanged: (v) =>
-                            setStateDialog(() => selectedCategory = v!),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: DropdownButtonFormField<String>(
+                              value: selectedCategory,
+                              isExpanded: true,
+                              decoration: const InputDecoration(
+                                labelText: 'Категория',
+                              ),
+                              items: categories.isNotEmpty
+                                  ? categories
+                                        .map(
+                                          (c) => DropdownMenuItem(
+                                            value: c,
+                                            child: Text(c),
+                                          ),
+                                        )
+                                        .toList()
+                                  : [
+                                      DropdownMenuItem(
+                                        value: selectedCategory,
+                                        child: Text(selectedCategory),
+                                      ),
+                                    ],
+                              onChanged: (v) =>
+                                  setStateDialog(() => selectedCategory = v!),
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Изменить список категорий',
+                            icon: const Icon(
+                              Icons.settings,
+                              color: Color(0xFF1B5E20),
+                            ),
+                            onPressed: () async {
+                              await Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => const TaskCategoriesScreen(),
+                                ),
+                              );
+                              await _reloadCategories();
+                              setStateDialog(() {});
+                            },
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 12),
                       DropdownButtonFormField<String>(
@@ -926,7 +996,7 @@ class _TasksScreenState extends State<TasksScreen> {
                         ),
                       ],
 
-                      // ===== МАТЕРИАЛЫ СО СКЛАДА =====
+                      // МАТЕРИАЛЫ
                       const Divider(height: 32),
                       Row(
                         children: [
@@ -1035,7 +1105,7 @@ class _TasksScreenState extends State<TasksScreen> {
                           );
                         }),
 
-                      // ===== ФОТО =====
+                      // ФОТО
                       if (isEdit) ...[
                         const Divider(height: 32),
                         Row(
@@ -1146,7 +1216,7 @@ class _TasksScreenState extends State<TasksScreen> {
                         ],
                       ],
 
-                      // ===== КОММЕНТАРИИ =====
+                      // КОММЕНТАРИИ
                       if (isEdit) ...[
                         const Divider(height: 32),
                         Row(
@@ -1328,7 +1398,6 @@ class _TasksScreenState extends State<TasksScreen> {
                       timeLabel = 'Сегодня, ${formatTime(selectedTime!)}';
                     }
 
-                    // Сохраняем материалы и применяем разницу к складу
                     if (isEdit) {
                       final oldMaterials =
                           ((existing?['materials'] as List?) ?? [])
@@ -1410,8 +1479,6 @@ class _TasksScreenState extends State<TasksScreen> {
     if (realIndex < 0) return;
 
     final task = tasks[realIndex];
-
-    // Возвращаем материалы на склад
     final mats = ((task['materials'] as List?) ?? [])
         .map((e) => Map<String, dynamic>.from(e))
         .toList();
@@ -1485,8 +1552,7 @@ class _TasksScreenState extends State<TasksScreen> {
     }
 
     final filtered = _filteredTasks;
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
       body: Column(
