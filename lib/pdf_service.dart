@@ -1,19 +1,19 @@
 import 'dart:io';
-
+import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:intl/intl.dart';
 
 class PdfService {
-  static Future<pw.Font> _loadRegular() async {
-    final data = await File('assets/fonts/Roboto-Regular.ttf').readAsBytes();
-    return pw.Font.ttf(data.buffer.asByteData());
+   static Future<pw.Font> _loadRegular() async {
+    final data = await rootBundle.load('assets/fonts/Roboto-Regular.ttf');
+    return pw.Font.ttf(data);
   }
 
   static Future<pw.Font> _loadBold() async {
-    final data = await File('assets/fonts/Roboto-Bold.ttf').readAsBytes();
-    return pw.Font.ttf(data.buffer.asByteData());
+    final data = await rootBundle.load('assets/fonts/Roboto-Bold.ttf');
+    return pw.Font.ttf(data);
   }
 
   static DateTime? parseTaskDate(String? raw) {
@@ -523,12 +523,13 @@ class PdfService {
     String mechanicNominative = 'Ефимов И.В.', // для подписи
   }) async {
     // Загружаем Times New Roman
-    final regularData = await File('assets/fonts/TimesNewRoman.ttf')
-        .readAsBytes();
-    final boldData = await File('assets/fonts/TimesNewRoman-Bold.ttf')
-        .readAsBytes();
-    final regular = pw.Font.ttf(regularData.buffer.asByteData());
-    final bold = pw.Font.ttf(boldData.buffer.asByteData());
+        // Загружаем Times New Roman из ресурсов приложения
+    final regularData =
+        await rootBundle.load('assets/fonts/TimesNewRoman.ttf');
+    final boldData =
+        await rootBundle.load('assets/fonts/TimesNewRoman-Bold.ttf');
+    final regular = pw.Font.ttf(regularData);
+    final bold = pw.Font.ttf(boldData);
 
     final dateFmt = DateFormat('dd.MM.yyyy');
 
