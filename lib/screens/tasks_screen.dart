@@ -7,6 +7,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'task_categories_screen.dart';
+import '../category_style.dart';
 
 class TasksScreen extends StatefulWidget {
   const TasksScreen({super.key});
@@ -54,7 +55,6 @@ class _TasksScreenState extends State<TasksScreen> {
   Future<void> _loadAll() async {
     final prefs = await SharedPreferences.getInstance();
 
-    // Категории
     final rawCats = prefs.getString(_categoriesKey);
     if (rawCats != null && rawCats.isNotEmpty) {
       categories = (jsonDecode(rawCats) as List)
@@ -65,7 +65,6 @@ class _TasksScreenState extends State<TasksScreen> {
       await prefs.setString(_categoriesKey, jsonEncode(categories));
     }
 
-    // Задачи
     final String? rawTasks = prefs.getString(_storageKey);
     if (rawTasks != null && rawTasks.isNotEmpty) {
       final List<dynamic> decoded = jsonDecode(rawTasks);
@@ -78,24 +77,10 @@ class _TasksScreenState extends State<TasksScreen> {
         t.putIfAbsent('materials', () => <Map<String, dynamic>>[]);
       }
     } else {
-      tasks = [
-        {
-          'title': 'Заменить прокладку на насосе №3',
-          'category': '💧 Вода',
-          'priority': '🔴 Срочно',
-          'time': 'Сегодня, 10:00',
-          'equipmentId': null,
-          'completed': false,
-          'archived': false,
-          'comments': <Map<String, dynamic>>[],
-          'photos': <String>[],
-          'materials': <Map<String, dynamic>>[],
-        },
-      ];
+      tasks = [];
       await _saveTasks();
     }
 
-    // Оборудование
     final String? rawEq = prefs.getString(_equipmentKey);
     if (rawEq != null && rawEq.isNotEmpty) {
       final List<dynamic> decoded = jsonDecode(rawEq);
@@ -124,8 +109,6 @@ class _TasksScreenState extends State<TasksScreen> {
       });
     }
   }
-
-  // ============ СКЛАД ============
 
   Future<void> _applyMaterialsDiff({
     required List<Map<String, dynamic>> oldMaterials,
@@ -181,9 +164,7 @@ class _TasksScreenState extends State<TasksScreen> {
     final photosDir = Directory(
       '${supportDir.path}${Platform.pathSeparator}photos',
     );
-    if (!await photosDir.exists()) {
-      await photosDir.create(recursive: true);
-    }
+    if (!await photosDir.exists()) await photosDir.create(recursive: true);
     return photosDir;
   }
 
@@ -207,9 +188,7 @@ class _TasksScreenState extends State<TasksScreen> {
   Future<void> _deletePhotoFile(String path) async {
     try {
       final f = File(path);
-      if (await f.exists()) {
-        await f.delete();
-      }
+      if (await f.exists()) await f.delete();
     } catch (_) {}
   }
 
@@ -275,12 +254,10 @@ class _TasksScreenState extends State<TasksScreen> {
         final title = (t['title'] ?? '').toString().toLowerCase();
         if (!title.contains(q)) return false;
       }
-      if (priorityFilter != null && t['priority'] != priorityFilter) {
+      if (priorityFilter != null && t['priority'] != priorityFilter)
         return false;
-      }
-      if (categoryFilter != null && t['category'] != categoryFilter) {
+      if (categoryFilter != null && t['category'] != categoryFilter)
         return false;
-      }
       if (equipmentFilter != null) {
         if (equipmentFilter == '_none_') {
           if (t['equipmentId'] != null) return false;
@@ -441,153 +418,33 @@ class _TasksScreenState extends State<TasksScreen> {
   ) async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_warehouseKey);
-    if (raw == null || raw.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Склад пуст — добавь запчасти на вкладке «Склад»'),
-          ),
-        );
-      }
-      return null;
+
+    List<Map<String, dynamic>> warehouse = [];
+    if (raw != null && raw.isNotEmpty) {
+      warehouse = (jsonDecode(raw) as List)
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
     }
 
-    final warehouse = (jsonDecode(raw) as List)
-        .map((e) => Map<String, dynamic>.from(e))
-        .toList();
-
-    if (warehouse.isEmpty) return null;
-
-    String search = '';
-
-    return showModalBottomSheet<Map<String, dynamic>>(
+    final result = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setSheetState) {
-            final filtered = warehouse.where((w) {
-              if (search.isEmpty) return true;
-              final q = search.toLowerCase();
-              return (w['name'] ?? '').toString().toLowerCase().contains(q) ||
-                  (w['article'] ?? '').toString().toLowerCase().contains(q);
-            }).toList();
-
-            return Container(
-              padding: EdgeInsets.only(
-                bottom: MediaQuery.of(context).viewInsets.bottom,
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.inventory_2, color: Color(0xFF1B5E20)),
-                        const SizedBox(width: 8),
-                        const Text(
-                          'Выбрать со склада',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const Spacer(),
-                        IconButton(
-                          icon: const Icon(Icons.close),
-                          onPressed: () => Navigator.pop(context),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: TextField(
-                      decoration: InputDecoration(
-                        hintText: 'Поиск по названию или артикулу',
-                        prefixIcon: const Icon(Icons.search),
-                        isDense: true,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      onChanged: (v) => setSheetState(() => search = v),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Flexible(
-                    child: filtered.isEmpty
-                        ? const Padding(
-                            padding: EdgeInsets.all(32),
-                            child: Text(
-                              'Ничего не найдено',
-                              style: TextStyle(color: Colors.grey),
-                            ),
-                          )
-                        : ListView.builder(
-                            shrinkWrap: true,
-                            itemCount: filtered.length,
-                            itemBuilder: (context, i) {
-                              final w = filtered[i];
-                              final qty = (w['quantity'] as num?)?.toInt() ?? 0;
-                              final already = currentMaterials.firstWhere(
-                                (m) => m['id'] == w['id'],
-                                orElse: () => <String, dynamic>{},
-                              );
-                              final alreadyQty =
-                                  (already['quantity'] as num?)?.toInt() ?? 0;
-                              final available = qty - alreadyQty;
-
-                              return ListTile(
-                                enabled: available > 0,
-                                leading: CircleAvatar(
-                                  backgroundColor: qty > 0
-                                      ? const Color(0xFF1B5E20)
-                                            .withOpacity(0.15)
-                                      : Colors.red.withOpacity(0.15),
-                                  child: Icon(
-                                    Icons.settings,
-                                    color: qty > 0
-                                        ? const Color(0xFF1B5E20)
-                                        : Colors.red,
-                                    size: 20,
-                                  ),
-                                ),
-                                title: Text(w['name'] ?? ''),
-                                subtitle: Text(
-                                  '${(w['article'] ?? '').toString().isEmpty ? '—' : w['article']}  •  Остаток: $available',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: available > 0
-                                        ? Colors.grey
-                                        : Colors.red,
-                                  ),
-                                ),
-                                trailing: available > 0
-                                    ? const Icon(Icons.add_circle_outline)
-                                    : const Text(
-                                        'нет',
-                                        style: TextStyle(color: Colors.red),
-                                      ),
-                                onTap: available > 0
-                                    ? () => Navigator.pop(context, w)
-                                    : null,
-                              );
-                            },
-                          ),
-                  ),
-                  const SizedBox(height: 8),
-                ],
-              ),
-            );
+        return _WarehousePickerSheet(
+          warehouse: warehouse,
+          currentMaterials: currentMaterials,
+          onCreated: (newItem) async {
+            warehouse.add(newItem);
+            final p = await SharedPreferences.getInstance();
+            await p.setString(_warehouseKey, jsonEncode(warehouse));
           },
         );
       },
     );
+    return result;
   }
 
   Future<int?> _askQuantity({
@@ -662,7 +519,6 @@ class _TasksScreenState extends State<TasksScreen> {
     );
     final TextEditingController commentController = TextEditingController();
 
-    // Категория — если текущей нет в списке, берем первую
     String selectedCategory = existing?['category']?.toString() ?? '';
     if (selectedCategory.isEmpty ||
         (categories.isNotEmpty && !categories.contains(selectedCategory))) {
@@ -679,13 +535,11 @@ class _TasksScreenState extends State<TasksScreen> {
               .map((e) => Map<String, dynamic>.from(e))
               .toList()
         : [];
-
     List<String> photos = isEdit
         ? ((existing?['photos'] as List?) ?? [])
               .map((e) => e.toString())
               .toList()
         : [];
-
     List<Map<String, dynamic>> materials = isEdit
         ? ((existing?['materials'] as List?) ?? [])
               .map((e) => Map<String, dynamic>.from(e))
@@ -723,8 +577,7 @@ class _TasksScreenState extends State<TasksScreen> {
             String formatTime(TimeOfDay t) =>
                 '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
             String formatDateTime(DateTime d) =>
-                '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}.${d.year} '
-                '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+                '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}.${d.year} ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
 
             Future<void> addComment() async {
               final text = commentController.text.trim();
@@ -749,7 +602,6 @@ class _TasksScreenState extends State<TasksScreen> {
                   acceptedTypeGroups: [typeGroup],
                 );
                 if (files.isEmpty) return;
-
                 for (final f in files) {
                   final savedPath = await _copyPhotoToApp(f.path);
                   if (savedPath != null) {
@@ -759,11 +611,9 @@ class _TasksScreenState extends State<TasksScreen> {
                 }
                 setStateDialog(() {});
               } catch (e) {
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Ошибка выбора фото: $e')),
-                  );
-                }
+                if (context.mounted)
+                  ScaffoldMessenger.of(context)
+                      .showSnackBar(SnackBar(content: Text('Ошибка: $e')));
               }
             }
 
@@ -845,15 +695,15 @@ class _TasksScreenState extends State<TasksScreen> {
                             value: null,
                             child: Text('— Без привязки —'),
                           ),
-                          ...equipmentList.map((e) {
-                            return DropdownMenuItem<String?>(
+                          ...equipmentList.map(
+                            (e) => DropdownMenuItem<String?>(
                               value: e['id'] as String,
                               child: Text(
                                 e['name'] ?? '',
                                 overflow: TextOverflow.ellipsis,
                               ),
-                            );
-                          }),
+                            ),
+                          ),
                         ],
                         onChanged: (v) =>
                             setStateDialog(() => selectedEquipmentId = v),
@@ -932,9 +782,8 @@ class _TasksScreenState extends State<TasksScreen> {
                                   firstDate: DateTime(2024),
                                   lastDate: DateTime(2030),
                                 );
-                                if (picked != null) {
+                                if (picked != null)
                                   setStateDialog(() => selectedDate = picked);
-                                }
                               },
                               icon: const Icon(Icons.calendar_today, size: 18),
                               label: Text(
@@ -952,9 +801,8 @@ class _TasksScreenState extends State<TasksScreen> {
                                   context: context,
                                   initialTime: selectedTime ?? TimeOfDay.now(),
                                 );
-                                if (picked != null) {
+                                if (picked != null)
                                   setStateDialog(() => selectedTime = picked);
-                                }
                               },
                               icon: const Icon(Icons.access_time, size: 18),
                               label: Text(
@@ -966,7 +814,6 @@ class _TasksScreenState extends State<TasksScreen> {
                           ),
                         ],
                       ),
-
                       if (isEdit) ...[
                         const SizedBox(height: 12),
                         SizedBox(
@@ -995,7 +842,6 @@ class _TasksScreenState extends State<TasksScreen> {
                           ),
                         ),
                       ],
-
                       // МАТЕРИАЛЫ
                       const Divider(height: 32),
                       Row(
@@ -1096,9 +942,9 @@ class _TasksScreenState extends State<TasksScreen> {
                                     color: Colors.red,
                                   ),
                                   visualDensity: VisualDensity.compact,
-                                  onPressed: () {
-                                    setStateDialog(() => materials.removeAt(i));
-                                  },
+                                  onPressed: () => setStateDialog(
+                                    () => materials.removeAt(i),
+                                  ),
                                 ),
                               ],
                             ),
@@ -1310,11 +1156,9 @@ class _TasksScreenState extends State<TasksScreen> {
                                         ),
                                       const Spacer(),
                                       InkWell(
-                                        onTap: () {
-                                          setStateDialog(() {
-                                            comments.removeAt(i);
-                                          });
-                                        },
+                                        onTap: () => setStateDialog(
+                                          () => comments.removeAt(i),
+                                        ),
                                         child: const Icon(
                                           Icons.close,
                                           size: 16,
@@ -1380,7 +1224,6 @@ class _TasksScreenState extends State<TasksScreen> {
                   ),
                   onPressed: () async {
                     if (titleController.text.trim().isEmpty) return;
-
                     final toDelete = newlyAddedPhotos
                         .where((p) => !photos.contains(p))
                         .toList();
@@ -1391,9 +1234,8 @@ class _TasksScreenState extends State<TasksScreen> {
                     String timeLabel = 'Сегодня';
                     if (selectedDate != null) {
                       timeLabel = formatDate(selectedDate!);
-                      if (selectedTime != null) {
+                      if (selectedTime != null)
                         timeLabel += ', ${formatTime(selectedTime!)}';
-                      }
                     } else if (selectedTime != null) {
                       timeLabel = 'Сегодня, ${formatTime(selectedTime!)}';
                     }
@@ -1952,6 +1794,386 @@ class _TasksScreenState extends State<TasksScreen> {
               foregroundColor: Colors.white,
               child: const Icon(Icons.add),
             ),
+    );
+  }
+}
+
+// ============ ШТОРКА ВЫБОРА ЗАПЧАСТИ СО СКЛАДА ============
+class _WarehousePickerSheet extends StatefulWidget {
+  final List<Map<String, dynamic>> warehouse;
+  final List<Map<String, dynamic>> currentMaterials;
+  final Future<void> Function(Map<String, dynamic> newItem) onCreated;
+
+  const _WarehousePickerSheet({
+    required this.warehouse,
+    required this.currentMaterials,
+    required this.onCreated,
+  });
+
+  @override
+  State<_WarehousePickerSheet> createState() => _WarehousePickerSheetState();
+}
+
+class _WarehousePickerSheetState extends State<_WarehousePickerSheet> {
+  String search = '';
+  List<Map<String, dynamic>> categories = [];
+
+  static const String _categoriesKey = 'warehouse_categories';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCategories();
+  }
+
+  Future<void> _loadCategories() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_categoriesKey);
+    if (raw != null && raw.isNotEmpty) {
+      setState(() {
+        categories = (jsonDecode(raw) as List)
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+        for (final c in categories) {
+          c.putIfAbsent('subcategories', () => <Map<String, dynamic>>[]);
+          c.putIfAbsent('icon', () => 'category');
+          c.putIfAbsent('color', () => 'green');
+        }
+      });
+    }
+  }
+
+  Map<String, dynamic>? _findCategory(String? id) {
+    if (id == null) return null;
+    for (final c in categories) {
+      if (c['id'] == id) return c;
+    }
+    return null;
+  }
+
+  Future<Map<String, dynamic>?> _showNewItemDialog() async {
+    final nameCtrl = TextEditingController();
+    final articleCtrl = TextEditingController();
+    final qtyCtrl = TextEditingController(text: '1');
+    final minCtrl = TextEditingController(text: '0');
+    final locCtrl = TextEditingController();
+
+    String? categoryId = categories.isNotEmpty
+        ? categories.first['id'].toString()
+        : null;
+    String? subcategoryId;
+
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final cat = _findCategory(categoryId);
+            final subs = (cat?['subcategories'] as List?) ?? [];
+
+            return AlertDialog(
+              title: const Text('Новая запчасть'),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextField(
+                        controller: nameCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Название',
+                          hintText: 'Ремень А-1000',
+                        ),
+                        autofocus: true,
+                      ),
+                      const SizedBox(height: 10),
+                      if (categories.isNotEmpty) ...[
+                        DropdownButtonFormField<String?>(
+                          value: categoryId,
+                          isExpanded: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Категория',
+                          ),
+                          items: categories.map((c) {
+                            return DropdownMenuItem<String?>(
+                              value: c['id'].toString(),
+                              child: Text(c['name'] ?? ''),
+                            );
+                          }).toList(),
+                          onChanged: (v) => setDialogState(() {
+                            categoryId = v;
+                            subcategoryId = null;
+                          }),
+                        ),
+                        const SizedBox(height: 10),
+                        if (subs.isNotEmpty) ...[
+                          DropdownButtonFormField<String?>(
+                            value: subcategoryId,
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Подкатегория',
+                            ),
+                            items: [
+                              const DropdownMenuItem<String?>(
+                                value: null,
+                                child: Text('— Без подкатегории —'),
+                              ),
+                              ...subs.map((s) {
+                                return DropdownMenuItem<String?>(
+                                  value: s['id'].toString(),
+                                  child: Text(s['name'] ?? ''),
+                                );
+                              }),
+                            ],
+                            onChanged: (v) =>
+                                setDialogState(() => subcategoryId = v),
+                          ),
+                          const SizedBox(height: 10),
+                        ],
+                      ],
+                      TextField(
+                        controller: articleCtrl,
+                        decoration: const InputDecoration(labelText: 'Артикул'),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: qtyCtrl,
+                              decoration: const InputDecoration(
+                                labelText: 'Количество',
+                              ),
+                              keyboardType: TextInputType.number,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: TextField(
+                              controller: minCtrl,
+                              decoration: const InputDecoration(
+                                labelText: 'Минимум',
+                              ),
+                              keyboardType: TextInputType.number,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: locCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Где хранится',
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Отмена'),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1B5E20),
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: () {
+                    if (nameCtrl.text.trim().isEmpty) return;
+                    Navigator.pop(context, {
+                      'id': DateTime.now().millisecondsSinceEpoch.toString(),
+                      'name': nameCtrl.text.trim(),
+                      'categoryId': categoryId,
+                      'subcategoryId': subcategoryId,
+                      'article': articleCtrl.text.trim(),
+                      'quantity': int.tryParse(qtyCtrl.text.trim()) ?? 0,
+                      'minQuantity': int.tryParse(minCtrl.text.trim()) ?? 0,
+                      'location': locCtrl.text.trim(),
+                      'notes': '',
+                      'updatedAt': DateTime.now().toIso8601String(),
+                    });
+                  },
+                  child: const Text('Создать'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (result != null) {
+      await widget.onCreated(result);
+    }
+    return result;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final filtered = widget.warehouse.where((w) {
+      if (search.isEmpty) return true;
+      final q = search.toLowerCase();
+      return (w['name'] ?? '').toString().toLowerCase().contains(q) ||
+          (w['article'] ?? '').toString().toLowerCase().contains(q);
+    }).toList();
+
+    return Container(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Заголовок
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 8, 8),
+            child: Row(
+              children: [
+                const Icon(Icons.inventory_2, color: Color(0xFF1B5E20)),
+                const SizedBox(width: 8),
+                const Text(
+                  'Выбрать со склада',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+          ),
+
+          // Кнопка "Создать новую"
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  final created = await _showNewItemDialog();
+                  if (created != null && mounted) {
+                    Navigator.pop(context, created);
+                  }
+                },
+                icon: const Icon(Icons.add_circle_outline, size: 18),
+                label: const Text('Создать новую запчасть'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF1B5E20),
+                  side: const BorderSide(color: Color(0xFF1B5E20)),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+
+          // Поиск
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: TextField(
+              decoration: InputDecoration(
+                hintText: 'Поиск по названию или артикулу',
+                prefixIcon: const Icon(Icons.search),
+                isDense: true,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              onChanged: (v) => setState(() => search = v),
+            ),
+          ),
+          const SizedBox(height: 8),
+
+          // Список
+          Flexible(
+            child: filtered.isEmpty
+                ? Padding(
+                    padding: const EdgeInsets.all(32),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.inventory_2_outlined,
+                          size: 48,
+                          color: Colors.grey,
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          widget.warehouse.isEmpty
+                              ? 'Склад пуст.\nСоздай первую запчасть сверху.'
+                              : 'Ничего не найдено',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Colors.grey,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: filtered.length,
+                    itemBuilder: (context, i) {
+                      final w = filtered[i];
+                      final qty = (w['quantity'] as num?)?.toInt() ?? 0;
+                      final already = widget.currentMaterials.firstWhere(
+                        (m) => m['id'] == w['id'],
+                        orElse: () => <String, dynamic>{},
+                      );
+                      final alreadyQty =
+                          (already['quantity'] as num?)?.toInt() ?? 0;
+                      final available = qty - alreadyQty;
+                      final cat = _findCategory(w['categoryId']?.toString());
+
+                      return ListTile(
+                        enabled: available > 0,
+                        leading: CircleAvatar(
+                          backgroundColor: qty > 0
+                              ? const Color(0xFF1B5E20).withOpacity(0.15)
+                              : Colors.red.withOpacity(0.15),
+                          child: Icon(
+                            cat != null
+                                ? getCategoryIcon(cat['icon']?.toString())
+                                : Icons.settings,
+                            color: qty > 0
+                                ? (cat != null
+                                      ? getCategoryColor(
+                                          cat['color']?.toString(),
+                                        )
+                                      : const Color(0xFF1B5E20))
+                                : Colors.red,
+                            size: 20,
+                          ),
+                        ),
+                        title: Text(w['name'] ?? ''),
+                        subtitle: Text(
+                          '${(w['article'] ?? '').toString().isEmpty ? '—' : w['article']}  •  Остаток: $available',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: available > 0 ? Colors.grey : Colors.red,
+                          ),
+                        ),
+                        trailing: available > 0
+                            ? const Icon(Icons.add_circle_outline)
+                            : const Text(
+                                'нет',
+                                style: TextStyle(color: Colors.red),
+                              ),
+                        onTap: available > 0
+                            ? () => Navigator.pop(context, w)
+                            : null,
+                      );
+                    },
+                  ),
+          ),
+          const SizedBox(height: 12),
+        ],
+      ),
     );
   }
 }
